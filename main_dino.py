@@ -27,7 +27,7 @@ from vision_transformer import DINOHead
 # from utils import Aug_equi, cosine_scheduler_ascend, cosine_scheduler_descend, constant_scheduler, base_scheduler, gather_from_all, concat_all_gather
 from tqdm import trange
 import socket
-import builder as ssls
+import builder.dino as ssls
 torchvision_archs = sorted(name for name in torchvision_models.__dict__
     if name.islower() and not name.startswith("__")
     and callable(torchvision_models.__dict__[name]))
@@ -80,7 +80,7 @@ def get_args_parser():
     parser.add_argument('--clip_grad', type=float, default=0.0, help="""Maximal parameter
         gradient norm if using gradient clipping. Clipping with norm .3 ~ 1.0 can
         help optimization for larger ViT architectures. 0 for disabling.""")
-    parser.add_argument('--batch_size_per_gpu', default=256, type=int,
+    parser.add_argument('--batch_size_per_gpu', default=128, type=int,
         help='Per-GPU batch-size : number of distinct images loaded on one GPU.')
     parser.add_argument('--epochs', default=100, type=int, help='Number of epochs of training.')
     parser.add_argument('--freeze_last_layer', default=1, type=int, help="""Number of epochs
@@ -136,7 +136,7 @@ def get_args_parser():
     ## For equiv sampler scheduler
     parser.add_argument('--warmup-epochs-scheduler', default=0, type=int, help='number of warmup epochs for scheduler')
     parser.add_argument('--rest-epochs-scheduler', default=0, type=int, help='number of resting epochs where no equivariance loss is imposed')
-    parser.add_argument('--equiv-ratio-start', type=float, default=0.01, help="""Ratio of minibatch for equivariance loss""")
+    parser.add_argument('--equiv-ratio-start', type=float, default=0.02, help="""Ratio of minibatch for equivariance loss""")
     parser.add_argument('--equiv-ratio-end', type=float, default=0.0, help="""Ratio of minibatch for equivariance loss""")
     parser.add_argument('--tag', default='ex', type=str, help='append at the end of the foldername')
     
@@ -217,7 +217,7 @@ def train_dino(args):
     #     student = nn.parallel.DistributedDataParallel(student, device_ids=[args.gpu])
     # else:
         # student = nn.parallel.DistributedDataParallel(student, device_ids=[args.gpu], find_unused_parameters=True)
-    student = nn.parallel.DistributedDataParallel(student, device_ids=[args.gpu], find_unused_parameters=True)
+    student = nn.parallel.DistributedDataParallel(student, device_ids=[args.gpu], find_unused_parameters=True if args.equiv_mode == 'erl' else False)
         
     # teacher and student start with the same weights
     teacher_without_ddp.load_state_dict(student.module.state_dict(), strict=False)
@@ -281,13 +281,13 @@ def train_dino(args):
             rest_epochs=args.rest_epochs_scheduler,
             ratio=args.equiv_ratio_start,
         )
+        assert args.equiv_ratio_start > 0.0
+        assert args.equiv_ratio_end == 0.0
     else:
         equi_scheduler = utils.base_scheduler(
             args.epochs, len(data_loader),
         )
 
-    assert args.equiv_ratio_start > 0.0
-    assert args.equiv_ratio_end == 0.0
 
     proj_name = f'DINO_{args.equiv_mode}_{args.arch}_{args.lr}_clipgrad_{args.clip_grad}_{socket.gethostname()}_ep{args.epochs}_{args.tag}' if args.equiv_mode != 'erl' else f'DINO_{args.equiv_mode}_{args.arch}' \
         +f'_{args.lr}_{args.equiv_mode}_{args.equiv_scale[0]}_{args.equiv_scale[1]}_{round(args.equiv_aspect_ratio[0],2)}_{args.equiv_lambda}_{args.equiv_layer}_{args.warmup_epochs_scheduler}' \
