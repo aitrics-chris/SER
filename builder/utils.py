@@ -947,7 +947,7 @@ class Aug_equi(nn.Module):
                                     )
                 
         self.seed_generator = torch.Generator()
-        self.seed_generator.manual_seed(seed)           
+        self.seed_generator.manual_seed(seed)
 
     def set_seed(self, seed):
         # self.mask = self.mask.cuda(_device)

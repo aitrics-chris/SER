@@ -5,7 +5,8 @@ import sys
 from .utils import concat_all_gather
 import torch.nn as nn
 import torch.nn.functional as F
-from builder.stl import STLTransformModule, load_mlp
+from builder.stl import STLTransformModule, load_mlp, build_transforms
+from torchvision.transforms import v2
 
 
 def train_inv(student, teacher, teacher_without_ddp, images, aug_equi, _mean, _std, epoch, dino_loss, loss_list_inv, loss_list_equiv, inv_samples_num, equiv_samples_num, args):
@@ -154,24 +155,36 @@ def train_essl(student, teacher, teacher_without_ddp, images, aug_equi, _mean, _
 
 def train_stl(student, teacher, teacher_without_ddp, images, aug_equi, _mean, _std, epoch, dino_loss, loss_list_inv, loss_list_equiv, inv_samples_num, equiv_samples_num, args):
     with torch.no_grad():
+        # Apply color augmentations using aug_equi
         aug_images_0 = aug_equi.aug_inv1(images[0]).sub_(_mean).div_(_std)
         aug_images_1 = aug_equi.aug_inv2(images[1]).sub_(_mean).div_(_std)
         
-        w, h, degrees, flips, num_rot90 = aug_equi.get_params(
-            args.equiv_scale, args.equiv_aspect_ratio, images[0].shape[0]
-        )
+        # Apply geometric augmentations
+        w, h, degrees, flips, num_rot90 = aug_equi.get_params(args.equiv_scale, args.equiv_aspect_ratio, images[0].shape[0])
         
-        trans_images_0 = aug_equi.aug_equiv(aug_images_0, w*args.stride, h*args.stride, degrees, flips, num_rot90)
-        trans_images_1 = aug_equi.aug_equiv(aug_images_1, w*args.stride, h*args.stride, degrees, flips, num_rot90)
+        # Create transformed versions using the same geometric parameters
+        trans_images_0 = aug_equi.aug_equiv(
+            aug_images_0, 
+            w*args.stride, h*args.stride, 
+            degrees, flips, num_rot90
+        )
+        trans_images_1 = aug_equi.aug_equiv(
+            aug_images_1, 
+            w*args.stride, h*args.stride, 
+            degrees, flips, num_rot90
+        )
     
     with torch.autocast(device_type="cuda"):
-        # Teacher forward pass on original views (for DINO loss)
+        # Get teacher output on augmented views
         teacher_output = teacher([aug_images_0, aug_images_1])
         
-        # Student forward pass for STL
-        stl_outputs = student.module.stl_forward(aug_images_0, aug_images_1, trans_images_0, trans_images_1)
+        # Forward pass through student with all views
+        stl_outputs = student.module.stl_forward(
+            aug_images_0, aug_images_1,  # Augmented views
+            trans_images_0, trans_images_1  # Transformed views
+        )
         
-        # Compute standard DINO loss for invariance
+        # Compute invariance loss
         inv_features = stl_outputs['inv_features']
         student_output = torch.cat([inv_features[0], inv_features[1]])
         loss_inv = dino_loss(student_output, teacher_output, epoch)
@@ -180,9 +193,13 @@ def train_stl(student, teacher, teacher_without_ddp, images, aug_equi, _mean, _s
         stl_losses = student.module.compute_stl_losses(stl_outputs)
         loss_equiv = stl_losses['equi']
         loss_trans = stl_losses['trans']
-
-        loss = loss_inv * args.stl_inv_weight + loss_equiv * args.stl_equi_weight + loss_trans * args.stl_trans_weight
+        
+        # Combine losses with weights
+        loss = (loss_inv * args.stl_inv_weight + 
+                loss_equiv * args.stl_equi_weight + 
+                loss_trans * args.stl_trans_weight)
     
+    # Update loss tracking
     if dist.get_rank() == 0:
         loss_list_inv.append(loss_inv.item())
         loss_list_equiv.append(loss_equiv.item() + loss_trans.item())
@@ -192,10 +209,7 @@ def train_stl(student, teacher, teacher_without_ddp, images, aug_equi, _mean, _s
 
 def train_equimod(student, teacher, teacher_without_ddp, images, aug_equi, _mean, _std, epoch, dino_loss, loss_list_inv, loss_list_equiv, inv_samples_num, equiv_samples_num, args):
     total_images = len(images[0]) if isinstance(images, list) and len(images) > 0 else 0
-    
-    equiv_samples_num = 1
-    
-    # Default to using all images for invariance if equiv_samples_num is 0
+
     if equiv_samples_num <= 0:
         inv_samples_num = total_images
         equiv_samples_num = 0
@@ -229,26 +243,20 @@ def train_equimod(student, teacher, teacher_without_ddp, images, aug_equi, _mean
                 args.equiv_scale, args.equiv_aspect_ratio, equiv_samples_num
             )
             
-            # Apply geometric transformation
             trans_equiv_img = aug_equi.aug_equiv(
                 aug_equiv_img, w*args.stride, h*args.stride, degrees, flips, num_rot90
             )
         
-        # Get student output for original image
         with torch.autocast(device_type="cuda"):
             y0, features0 = student(aug_equiv_img, return_features=True)
             
-            # Get teacher output for transformed image
             with torch.no_grad():
                 yt, features_t = teacher(trans_equiv_img, return_features=True)
             
-            # Calculate equivariance loss (simple feature alignment for now)
             if features0 and features_t:
-                # Normalize features
                 f0 = F.normalize(features0[0], dim=1)
                 ft = F.normalize(features_t[0], dim=1)
                 
-                # Simple cosine similarity loss
                 loss_equiv = 1.0 - torch.mean(torch.sum(f0 * ft, dim=1))
     
     # Combine losses
@@ -317,7 +325,14 @@ class MultiCropWrapper(nn.Module):
             self.inv_weight = args.stl_inv_weight
             self.equi_weight = args.stl_equi_weight
             self.trans_weight = args.stl_trans_weight
-            
+
+            self.inv_projector = load_mlp(embed_dim, args.stl_projector)
+            self.equi_projector = load_mlp(embed_dim, args.stl_projector)
+            self.trans_projector = load_mlp(embed_dim, args.stl_trans_projector)
+
+            # Current simplified version
+            self.trans_backbone = load_mlp(2 * embed_dim, args.stl_trans_backbone)
+
         elif args.equiv_mode in ['essl', 'equimod', 'augself']:
             # For other equivariance modes, create a simple projector
             self.projector_equiv = nn.Sequential(
@@ -425,23 +440,10 @@ class MultiCropWrapper(nn.Module):
         Returns:
             Dictionary containing all necessary outputs for STL loss computation
         """
-        # Get features from backbone using the appropriate method
-        if hasattr(self.backbone, 'forward_baseline'):
-            feat_x1 = self.backbone.forward_baseline(x1)
-            feat_x2 = self.backbone.forward_baseline(x2)
-            feat_t1 = self.backbone.forward_baseline(t1)
-            feat_t2 = self.backbone.forward_baseline(t2)
-        elif hasattr(self.backbone, 'forward_inv_'):
-            feat_x1 = self.backbone.forward_inv_(x1)
-            feat_x2 = self.backbone.forward_inv_(x2)
-            feat_t1 = self.backbone.forward_inv_(t1)
-            feat_t2 = self.backbone.forward_inv_(t2)
-        else:
-            # This should not happen based on the error, but included for completeness
-            feat_x1 = self.backbone(x1)
-            feat_x2 = self.backbone(x2)
-            feat_t1 = self.backbone(t1)
-            feat_t2 = self.backbone(t2)
+        feat_x1 = self.backbone.forward_baseline(x1)
+        feat_x2 = self.backbone.forward_baseline(x2)
+        feat_t1 = self.backbone.forward_baseline(t1)
+        feat_t2 = self.backbone.forward_baseline(t2)
         
         # Handle tuple outputs if needed
         if isinstance(feat_x1, tuple):
@@ -453,25 +455,24 @@ class MultiCropWrapper(nn.Module):
         if isinstance(feat_t2, tuple):
             feat_t2 = feat_t2[0]
         
-        # Project features for invariance loss
         proj_x1 = self.head(feat_x1)
         proj_x2 = self.head(feat_x2)
         proj_t1 = self.head(feat_t1)
         proj_t2 = self.head(feat_t2)
         
-        # Project features for equivariance loss
         equi_x1 = self.transform_module.project_features(feat_x1)
         equi_x2 = self.transform_module.project_features(feat_x2)
         equi_t1 = self.transform_module.project_features(feat_t1)
         equi_t2 = self.transform_module.project_features(feat_t2)
         
         # Compute transformation representations
-        trans_12, trans_21 = self.transform_module.forward_transform(feat_x1, feat_x2)
-        
-        # Apply transformations
-        pred_t1 = self.transform_module.apply_transform(feat_x1, trans_12)
-        pred_t2 = self.transform_module.apply_transform(feat_x2, trans_21)
-        
+        trans_12 = self.trans_backbone(torch.cat([feat_x1, feat_t1], dim=-1))
+        trans_21 = self.trans_backbone(torch.cat([feat_x2, feat_t2], dim=-1))
+
+        # Apply transformations (corrected order)
+        pred_t1 = self.transform_module.apply_transform(feat_x1, trans_21)
+        pred_t2 = self.transform_module.apply_transform(feat_x2, trans_12)
+
         return {
             'inv_features': [proj_x1, proj_x2, proj_t1, proj_t2],
             'equi_features': [equi_x1, equi_x2, equi_t1, equi_t2],
@@ -481,8 +482,6 @@ class MultiCropWrapper(nn.Module):
         }
     
     def compute_stl_losses(self, outputs):
-        inv_features = outputs['inv_features']
-        equi_features = outputs['equi_features']
         trans_features = outputs['trans_features']
         pred_features = outputs['pred_features']
         target_features = outputs['target_features']

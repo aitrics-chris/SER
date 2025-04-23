@@ -142,13 +142,13 @@ def get_args_parser():
     parser.add_argument('--temperature', type=float, default=0.4, help="""Temperature for InfoNCE""")
     
     # STL
-    parser.add_argument('--stl-projector', default='512-128', type=str, help='Representation projector layers for STL')
-    parser.add_argument('--stl-trans-backbone', default='128-128', type=str, help='Transformation backbone layers for STL')
-    parser.add_argument('--stl-trans-projector', default='128-128', type=str, help='Transformation representation projector layers for STL')
-    parser.add_argument('--stl-inv-weight', default=1.0, type=float, help='Invariance loss weight for STL')
-    parser.add_argument('--stl-equi-weight', default=1.0, type=float, help='Equivariance loss weight for STL')
-    parser.add_argument('--stl-trans-weight', default=0.1, type=float, help='Transformation loss weight for STL')
-    parser.add_argument('--stl-temperature', default=0.2, type=float, help='InfoNCE temperature for STL losses')
+    parser.add_argument('--stl-projector', type=str, default='2048-256', help='projector MLP for STL')
+    parser.add_argument('--stl-trans-projector', type=str, default='256-128', help='transformation projector MLP for STL')
+    parser.add_argument('--stl-trans-backbone', type=str, default='4096-256', help='transformation backbone MLP for STL')
+    parser.add_argument('--stl-inv-weight', type=float, default=1.0, help='weight for invariance loss')
+    parser.add_argument('--stl-equi-weight', type=float, default=1.0, help='weight for equivariance loss')
+    parser.add_argument('--stl-trans-weight', type=float, default=1.0, help='weight for transformation loss')
+    parser.add_argument('--stl-temperature', type=float, default=0.2, help='temperature for STL')
 
     # EquiMod
     parser.add_argument('--equimod-inv-weight', type=float, default=1.0, help='Weight for the invariance loss component in EquiMod')

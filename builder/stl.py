@@ -2,6 +2,7 @@ import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from torchvision.transforms import v2
 
 
 def load_mlp(input_dim: int, layers_str: str) -> nn.Sequential:
@@ -27,14 +28,12 @@ class EquiTrans(nn.Module):
         super().__init__()
         self.equitrans_layers = [equi_repr_dim, equi_repr_dim]
 
-        # Calculate parameters needed for each block
         self.num_weights_per_block = [
             self.equitrans_layers[i] * self.equitrans_layers[i + 1]
             for i in range(len(self.equitrans_layers) - 1)
         ]
         self.cumulative_params = [0] + list(np.cumsum(self.num_weights_per_block))
 
-        # Hypernetwork to generate weights
         self.hypernet = nn.Linear(trans_repr_dim, self.cumulative_params[-1], bias=False)
 
     def forward(self, r: torch.Tensor, t: torch.Tensor) -> torch.Tensor:
@@ -44,15 +43,12 @@ class EquiTrans(nn.Module):
         all_weights = self.hypernet(t)  # shape: [B, total_params]
         output = r.unsqueeze(1)
 
-        # Sequentially apply linear blocks
         for i in range(len(self.equitrans_layers) - 1):
             start_idx = self.cumulative_params[i]
             end_idx = start_idx + self.num_weights_per_block[i]
 
             w_block = all_weights[..., start_idx:end_idx]
-            w_reshaped = w_block.view(-1,
-                                      self.equitrans_layers[i + 1],
-                                      self.equitrans_layers[i])
+            w_reshaped = w_block.view(-1, self.equitrans_layers[i + 1], self.equitrans_layers[i])
             output = torch.bmm(output, w_reshaped.transpose(-2, -1))
 
         return output.squeeze()
@@ -67,12 +63,10 @@ class STLTransformModule(nn.Module):
     """
     def __init__(self, repr_dim, args):
         super().__init__()
-        # Parse dimensions from args, with fallbacks to prevent errors
         trans_backbone = args.stl_trans_backbone
         trans_projector = args.stl_trans_projector
         projector = args.stl_projector
         
-        # Get dimensions safely
         try:
             trans_backbone_dim = int(trans_backbone.split('-')[-1])
         except (ValueError, IndexError):
@@ -196,11 +190,38 @@ class STLTransformModule(nn.Module):
             torch.arange(0, n, device=z1.device)
         ])
         
-        # Mask out self-similarity
         mask = torch.eye(2*n, dtype=torch.bool, device=z1.device)
         scores = scores.masked_fill(mask, float('-inf'))
         
-        # Compute cross entropy loss
         loss = F.cross_entropy(scores, labels)
         
         return loss
+
+def build_transforms(mean: torch.Tensor, std: torch.Tensor):
+    """
+    Build base, aligned, and invariant transforms for STL10.
+    """
+    base_transform = v2.Compose([
+        v2.PILToTensor(),
+        v2.ConvertImageDtype(torch.float32),
+    ])
+
+    aligned_transform = torch.nn.Sequential(
+        v2.RandomResizedCrop(224, scale=(0.25, 1.0)),
+        v2.RandomApply(
+            [v2.ColorJitter(brightness=0.4, contrast=0.4, saturation=0.4, hue=0.1)],
+            p=0.8
+        ),
+        v2.RandomGrayscale(p=0.2)
+    )
+
+    invariant_transform = v2.Compose([
+        v2.RandomHorizontalFlip(),
+        v2.RandomApply(
+            [v2.GaussianBlur(kernel_size=9, sigma=(0.1, 2.0))],
+            p=0.5
+        ),
+        v2.Normalize(mean, std)
+    ])
+
+    return base_transform, aligned_transform, invariant_transform
