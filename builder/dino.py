@@ -191,90 +191,75 @@ def train_stl(student, teacher, teacher_without_ddp, images, aug_equi, _mean, _s
 
 
 def train_equimod(student, teacher, teacher_without_ddp, images, aug_equi, _mean, _std, epoch, dino_loss, loss_list_inv, loss_list_equiv, inv_samples_num, equiv_samples_num, args):
-    """
-    Train the model using the EquiMod approach with both invariance and equivariance losses.
+    total_images = len(images[0]) if isinstance(images, list) and len(images) > 0 else 0
     
-    Args:
-        student: Student model (DDP wrapped)
-        teacher: Teacher model (DDP wrapped)
-        teacher_without_ddp: Teacher model (unwrapped)
-        images: List of input images
-        aug_equi: Equivariant augmentation object (not used in this implementation)
-        _mean: Mean for normalization
-        _std: Standard deviation for normalization
-        epoch: Current epoch
-        dino_loss: DINO loss function
-        loss_list_inv: List to track invariance losses
-        loss_list_equiv: List to track equivariance losses
-        inv_samples_num: Number of samples for invariance loss
-        equiv_samples_num: Number of samples for equivariance loss
-        args: Training arguments
-        
-    Returns:
-        loss: Total loss
-        loss_inv: Invariance loss
-        loss_equiv: Equivariance loss
-        loss_list_inv: Updated invariance loss list
-        loss_list_equiv: Updated equivariance loss list
-    """
-    # Ensure we have enough images
-    if len(images) < inv_samples_num + equiv_samples_num:
-        # Adjust sample numbers if we don't have enough images
-        total_images = len(images)
-        inv_samples_num = max(2, total_images // 2)
-        equiv_samples_num = max(0, total_images - inv_samples_num)
+    equiv_samples_num = 1
     
-    # Split images for invariance and equivariance
-    inv_images = images[:inv_samples_num]
-    equiv_images = images[inv_samples_num:inv_samples_num+equiv_samples_num] if equiv_samples_num > 0 else []
+    # Default to using all images for invariance if equiv_samples_num is 0
+    if equiv_samples_num <= 0:
+        inv_samples_num = total_images
+        equiv_samples_num = 0
     
     # Process invariance images
-    student_inv_output = student(inv_images[0])
     with torch.no_grad():
-        teacher_output = teacher(inv_images[1])
+        aug_images_0 = aug_equi.aug_inv1(images[0]).sub_(_mean).div_(_std)
+        aug_images_1 = aug_equi.aug_inv2(images[1]).sub_(_mean).div_(_std)
     
     # Calculate invariance loss
-    loss_inv = dino_loss(student_inv_output, teacher_output, epoch)
+    with torch.autocast(device_type="cuda"):
+        teacher_output = teacher([aug_images_0, aug_images_1])
+        student_output = student([aug_images_0, aug_images_1])
+        loss_inv = dino_loss(student_output, teacher_output, epoch)
     
     # Initialize equivariance loss
     loss_equiv = torch.tensor(0.0, device=loss_inv.device)
-    actual_equiv_samples_num = len(equiv_images)
     
-    # Process equivariance images if available
-    if args.equimod_equi_weight > 0 and actual_equiv_samples_num > 0:
-        # Instead of using aug_equi, we'll manually create transformed images and parameters
-        img = equiv_images[0] if actual_equiv_samples_num > 0 else None
+    # Process equivariance images if available and enabled
+    if args.equimod_equi_weight > 0 and equiv_samples_num > 0:
+        # Create transformed images for equivariance
+        with torch.no_grad():
+            # Get a subset of images for equivariance
+            equiv_img = images[0][:equiv_samples_num]
+            
+            # Apply augmentations
+            aug_equiv_img = aug_equi.aug_inv1(equiv_img).sub_(_mean).div_(_std)
+            
+            # Generate transformation parameters
+            w, h, degrees, flips, num_rot90 = aug_equi.get_params(
+                args.equiv_scale, args.equiv_aspect_ratio, equiv_samples_num
+            )
+            
+            # Apply geometric transformation
+            trans_equiv_img = aug_equi.aug_equiv(
+                aug_equiv_img, w*args.stride, h*args.stride, degrees, flips, num_rot90
+            )
         
-        if img is not None:
-            batch_size = img.shape[0]
-            device = img.device
-            
-            # Create a simple transformation (identity for now)
-            transformed_img = img.clone()
-            
-            # Generate random parameters (15 parameters per image)
-            params = torch.rand(batch_size, 15, device=device)
-            
-            # Get student output for original image
-            y0 = student(img)
+        # Get student output for original image
+        with torch.autocast(device_type="cuda"):
+            y0, features0 = student(aug_equiv_img, return_features=True)
             
             # Get teacher output for transformed image
             with torch.no_grad():
-                yt = teacher(transformed_img)
+                yt, features_t = teacher(trans_equiv_img, return_features=True)
             
-            # Predict teacher output from student output and transformation parameters
-            yt_hat = student.module.predict_teacher_output(y0, params) if hasattr(student, 'module') else student.predict_teacher_output(y0, params)
-            
-            # Calculate equivariance loss (simple MSE for now)
-            if yt is not None and yt_hat is not None:
-                loss_equiv = F.mse_loss(yt_hat, yt.detach())
+            # Calculate equivariance loss (simple feature alignment for now)
+            if features0 and features_t:
+                # Normalize features
+                f0 = F.normalize(features0[0], dim=1)
+                ft = F.normalize(features_t[0], dim=1)
+                
+                # Simple cosine similarity loss
+                loss_equiv = 1.0 - torch.mean(torch.sum(f0 * ft, dim=1))
     
     # Combine losses
-    loss = args.equimod_inv_weight * loss_inv + args.equimod_equi_weight * loss_equiv
+    loss = args.equimod_inv_weight * loss_inv
+    if args.equimod_equi_weight > 0:
+        loss += args.equimod_equi_weight * loss_equiv
     
     # Update loss lists for tracking
-    loss_list_inv.append(loss_inv.item())
-    loss_list_equiv.append(loss_equiv.item() if args.equimod_equi_weight > 0 and actual_equiv_samples_num > 0 else 0)
+    if dist.get_rank() == 0:
+        loss_list_inv.append(loss_inv.item())
+        loss_list_equiv.append(loss_equiv.item() if isinstance(loss_equiv, torch.Tensor) else 0)
     
     return loss, loss_inv, loss_equiv, loss_list_inv, loss_list_equiv
 

@@ -153,8 +153,6 @@ def get_args_parser():
     # EquiMod
     parser.add_argument('--equimod-inv-weight', type=float, default=1.0, help='Weight for the invariance loss component in EquiMod')
     parser.add_argument('--equimod-equi-weight', type=float, default=1.0, help='Weight for the equivariance loss component in EquiMod')
-    parser.add_argument('--equimod-inv-samples-num', type=int, default=1, help='Number of samples to use for invariance loss in EquiMod')
-    parser.add_argument('--equimod-equiv-samples-num', type=int, default=1, help='Number of samples to use for equivariance loss in EquiMod')
     parser.add_argument('--equimod-proj-head-eq-layers', default="2048-2048-", help='Size of layers of equivariant projection head in EquiMod')
     parser.add_argument('--equimod-proj-head-t-layers', default="128", help='Size of layers of transformation parameter head in EquiMod')
     parser.add_argument('--equimod-predictor-eq-layers', default="one", help='Size of layer of equivariance network in EquiMod')
@@ -525,3 +523,10 @@ class DataAugmentationDINO(object):
         crops = []
         crops.extend([tf(image) for tf in [self.global_transfo1, self.global_transfo2]])
         return crops
+
+
+if __name__ == '__main__':
+    parser = argparse.ArgumentParser('DINO', parents=[get_args_parser()])
+    args = parser.parse_args()
+    Path(args.output_dir).mkdir(parents=True, exist_ok=True)
+    train_dino(args)
