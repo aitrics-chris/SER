@@ -538,7 +538,44 @@ def trunc_normal_(tensor, mean=0., std=1., a=-2., b=2.):
     return _no_grad_trunc_normal_(tensor, mean, std, a, b)
 
 
-class LARS(torch.optim.Optimizer):
+
+
+class LARS_MoCo(torch.optim.Optimizer):
+    """
+    LARS optimizer, no rate scaling or weight decay for parameters <= 1D.
+    """
+    def __init__(self, params, lr=0, weight_decay=0, momentum=0.9, trust_coefficient=0.001):
+        defaults = dict(lr=lr, weight_decay=weight_decay, momentum=momentum, trust_coefficient=trust_coefficient)
+        super().__init__(params, defaults)
+
+    @torch.no_grad()
+    def step(self):
+        for g in self.param_groups:
+            for p in g['params']:
+                dp = p.grad
+
+                if dp is None:
+                    continue
+
+                if p.ndim > 1: # if not normalization gamma/beta or bias
+                    dp = dp.add(p, alpha=g['weight_decay'])
+                    param_norm = torch.norm(p)
+                    update_norm = torch.norm(dp)
+                    one = torch.ones_like(param_norm)
+                    q = torch.where(param_norm > 0.,
+                                    torch.where(update_norm > 0,
+                                    (g['trust_coefficient'] * param_norm / update_norm), one),
+                                    one)
+                    dp = dp.mul(q)
+
+                param_state = self.state[p]
+                if 'mu' not in param_state:
+                    param_state['mu'] = torch.zeros_like(p)
+                mu = param_state['mu']
+                mu.mul_(g['momentum']).add_(dp)
+                p.add_(mu, alpha=-g['lr'])
+
+class LARS_BT(torch.optim.Optimizer):
     """
     Almost copy-paste from https://github.com/facebookresearch/barlowtwins/blob/main/main.py
     """
@@ -950,13 +987,11 @@ class Aug_equi(nn.Module):
         self.seed_generator.manual_seed(seed)           
 
     def set_seed(self, seed):
-        # self.mask = self.mask.cuda(_device)
         self.seed_generator.manual_seed(seed)
 
     # @staticmethod
     def get_params(
         self,
-        # seed_generator,
         equiv_scale,
         ratio = [3.0 / 4.0, 4.0 / 3.0],
         batch_size = 128
@@ -964,13 +999,10 @@ class Aug_equi(nn.Module):
         log_ratio = log_ratio = torch.log(torch.tensor((ratio[0], ratio[1])))
         target_area = 196.0 * torch.empty(1).uniform_(equiv_scale[0], equiv_scale[1], generator=self.seed_generator).item() # (224/16)^2 = 196.0
         aspect_ratio = torch.exp(torch.empty(1).uniform_(log_ratio[0], log_ratio[1], generator=self.seed_generator)).item()
-        # target_area = 36.0 * torch.empty(1).uniform_(equiv_scale[0], equiv_scale[1]).item() # (96/16)^2 = 36.0
-        # aspect_ratio = torch.exp(torch.empty(1).uniform_(log_ratio[0], log_ratio[1])).item()
         w = int(round(math.sqrt(target_area * aspect_ratio)))
         h = int(round(math.sqrt(target_area / aspect_ratio)))
 
         num_rot90_pergpu = torch.randint(low=0, high=4, size=(1,), generator=self.seed_generator).item()
-        # degrees = torch.randint(low=0, high=4, size=(batch_size,), generator=self.seed_generator)
         if_rot180_persample = torch.rand(size=(batch_size,), generator=self.seed_generator) > 0.5
         flips = torch.rand(size=(batch_size,), generator=self.seed_generator) > 0.5
         
@@ -990,10 +1022,6 @@ class Aug_equi(nn.Module):
         return x
     
     def aug_equiv_feat(self, x, w, h, rot90_inv, rot90_another):
-        # self.param_tfx[1].data['degrees'] = degrees
-        # x = self.aug_eqiuv(x, params=self.param_tfx)
-        # x = transforms.functional.hflip(x)
-        # x = torch.cat(list(map(self.rotate_feat, torch.split(x, 1), degrees, flips)), dim=0)
         x = torch.rot90(x, k=rot90_inv+2, dims=[2,3])
         x = transforms.functional.hflip(x)
         x = nn.functional.interpolate(x, size=(w, h), mode='bicubic') # BxCx6x6 -> BxCxHxW
@@ -1005,10 +1033,6 @@ class Aug_equi(nn.Module):
         x = torch.rot90(x, k=2, dims=[2,3]) if degree else x
         return transforms.functional.hflip(x) if flip else x
 
-    # @staticmethod
-    # def rotate_feat(x, degree, flip):
-    #     x = transforms.functional.hflip(x) if flip else x
-    #     return torch.rot90(x, k=2, dims=[2,3]) if degree else x
 
 @torch.no_grad()
 def concat_all_gather(tensor, size):
