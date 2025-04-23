@@ -6,6 +6,7 @@ import time
 import math
 import json
 from pathlib import Path
+import copy
 
 import numpy as np
 from PIL import Image
@@ -89,8 +90,6 @@ def get_args_parser():
     parser.add_argument("--lr", default=0.0001, type=float, help="""Learning rate at the end of
         linear warmup (highest LR used during training). The learning rate is linearly scaled
         with the batch size, and specified here for a reference batch size of 256.""")
-    # parser.add_argument("--warmup_epochs", default=10, type=int,
-    #     help="Number of epochs for the linear learning-rate warm up.")
     parser.add_argument("--warmup_epochs", default=10, type=int,
         help="Number of epochs for the linear learning-rate warm up.")
     parser.add_argument('--min_lr', type=float, default=1e-5, help="""Target LR at the
@@ -115,6 +114,7 @@ def get_args_parser():
     parser.add_argument('--data_path', default='/home/chris/storage/imagenet_eval/train/', type=str,
         help='Please specify path to the ImageNet training data.')
     parser.add_argument('--output_dir', default="/home/chris/codes/erl/results", type=str, help='Path to save logs and checkpoints.')
+    parser.add_argument('--ckpt_dir', default='/nfs/thena/chris/icml/ckpt_dino', type=str)
     parser.add_argument('--seed', default=0, type=int, help='Random seed.')
     parser.add_argument('--num_workers', default=4, type=int, help='Number of data loading workers per GPU.')
     parser.add_argument("--dist_url", default="env://", type=str, help="""url used to set up
@@ -139,9 +139,25 @@ def get_args_parser():
     parser.add_argument('--equiv-ratio-start', type=float, default=0.01, help="""Ratio of minibatch for equivariance loss""")
     parser.add_argument('--equiv-ratio-end', type=float, default=0.0, help="""Ratio of minibatch for equivariance loss""")
     parser.add_argument('--tag', default='ex', type=str, help='append at the end of the foldername')
-    
     parser.add_argument('--temperature', type=float, default=0.4, help="""Temperature for InfoNCE""")
     
+    # STL
+    parser.add_argument('--stl-projector', default='512-128', type=str, help='Representation projector layers for STL')
+    parser.add_argument('--stl-trans-backbone', default='128-128', type=str, help='Transformation backbone layers for STL')
+    parser.add_argument('--stl-trans-projector', default='128-128', type=str, help='Transformation representation projector layers for STL')
+    parser.add_argument('--stl-inv-weight', default=1.0, type=float, help='Invariance loss weight for STL')
+    parser.add_argument('--stl-equi-weight', default=1.0, type=float, help='Equivariance loss weight for STL')
+    parser.add_argument('--stl-trans-weight', default=0.1, type=float, help='Transformation loss weight for STL')
+    parser.add_argument('--stl-temperature', default=0.2, type=float, help='InfoNCE temperature for STL losses')
+
+    # EquiMod
+    parser.add_argument('--equimod-inv-weight', type=float, default=1.0, help='Weight for the invariance loss component in EquiMod')
+    parser.add_argument('--equimod-equi-weight', type=float, default=1.0, help='Weight for the equivariance loss component in EquiMod')
+    parser.add_argument('--equimod-inv-samples-num', type=int, default=1, help='Number of samples to use for invariance loss in EquiMod')
+    parser.add_argument('--equimod-equiv-samples-num', type=int, default=1, help='Number of samples to use for equivariance loss in EquiMod')
+    parser.add_argument('--equimod-proj-head-eq-layers', default="2048-2048-", help='Size of layers of equivariant projection head in EquiMod')
+    parser.add_argument('--equimod-proj-head-t-layers', default="128", help='Size of layers of transformation parameter head in EquiMod')
+    parser.add_argument('--equimod-predictor-eq-layers', default="one", help='Size of layer of equivariance network in EquiMod')
     return parser
 
 
@@ -225,8 +241,38 @@ def train_dino(args):
     for p in teacher.parameters():
         p.requires_grad = False
     print(f"Student and Teacher are built: they are both {args.arch} network.")
-    if args.equiv_mode != 'inv':
+    if args.equiv_mode == 'erl':
         teacher.set_projector_equiv(student.module.projector_equiv)
+    elif args.equiv_mode == 'stl':
+        if not hasattr(student.module, 'transform_module'):
+            if args.arch == 'vit_small':
+                embed_dim = student.module.backbone.embed_dim
+            elif args.arch == 'resnet50':
+                embed_dim = 2048
+            else:
+                raise ValueError(f"Unknown architecture: {args.arch}")
+            
+            # Create the STL transformation module
+            from builder.stl import STLTransformModule
+            student.module.transform_module = STLTransformModule(
+                repr_dim=embed_dim,
+                args=args
+            )
+            
+            # Store loss weights
+            student.module.inv_weight = args.stl_inv_weight
+            student.module.equi_weight = args.stl_equi_weight
+            student.module.trans_weight = args.stl_trans_weight
+        
+        teacher_without_ddp.transform_module = copy.deepcopy(student.module.transform_module)
+        teacher.module.transform_module = teacher_without_ddp.transform_module
+
+        teacher_without_ddp.inv_weight = student.module.inv_weight
+        teacher_without_ddp.equi_weight = student.module.equi_weight
+        teacher_without_ddp.trans_weight = student.module.trans_weight
+        teacher.module.inv_weight = student.module.inv_weight
+        teacher.module.equi_weight = student.module.equi_weight
+        teacher.module.trans_weight = student.module.trans_weight
 
     # ============ preparing loss ... ============
     dino_loss = DINOLoss(
@@ -295,7 +341,7 @@ def train_dino(args):
 
 
     # proj_name = 'ex'
-    args.output_dir = os.path.join(f'/nfs/thena/chris/icml/ckpt_dino', args.equiv_mode, proj_name)
+    args.output_dir = os.path.join(args.ckpt_dir, args.equiv_mode, proj_name)
     os.makedirs(args.output_dir, exist_ok=True)
 
     loss_list_equiv = []
@@ -397,6 +443,7 @@ def train_one_epoch(student, teacher, teacher_without_ddp, dino_loss, data_loade
         metric_logger.update(loss_equiv=loss_equiv.item())
         metric_logger.update(lr=optimizer.param_groups[0]["lr"])
         metric_logger.update(wd=optimizer.param_groups[0]["weight_decay"])
+
     # gather the stats from all processes
     metric_logger.synchronize_between_processes()
     print("Averaged stats:", metric_logger)
@@ -478,9 +525,3 @@ class DataAugmentationDINO(object):
         crops = []
         crops.extend([tf(image) for tf in [self.global_transfo1, self.global_transfo2]])
         return crops
-
-if __name__ == '__main__':
-    parser = argparse.ArgumentParser('DINO', parents=[get_args_parser()])
-    args = parser.parse_args()
-    Path(args.output_dir).mkdir(parents=True, exist_ok=True)
-    train_dino(args)
