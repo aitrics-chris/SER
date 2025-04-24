@@ -178,15 +178,6 @@ def main():
     dist.barrier(device_ids=[torch.cuda.current_device()])
     setup_for_distributed(args.rank == 0)
     cudnn.benchmark = True
-
-    # ============ preparing data ... ============
-    args.batch_size = int(args.batch_size / args.world_size)
-    args.data_mode = args.equiv_mode if args.equiv_mode != 'erl' else 'inv'
-    train_dataset = loaders.__dict__[f'get_dataset_{args.data_mode}'](args)
-    train_sampler = torch.utils.data.distributed.DistributedSampler(train_dataset)
-    data_loader = torch.utils.data.DataLoader(
-        train_dataset, batch_size=args.batch_size, shuffle=(train_sampler is None),
-        num_workers=args.workers, pin_memory=True, sampler=train_sampler, drop_last=True)
     
     # ============ building networks ... ============
     print("=> creating model '{}'".format(args.arch))
@@ -216,6 +207,15 @@ def main():
     scaler = torch.GradScaler(device="cuda")
     summary_writer = SummaryWriter() if args.rank == 0 else None
 
+
+    # ============ preparing data ... ============
+    args.batch_size = int(args.batch_size / args.world_size)
+    args.data_mode = args.equiv_mode if args.equiv_mode != 'erl' else 'inv'
+    train_dataset = loaders.__dict__[f'get_dataset_{args.data_mode}'](args)
+    train_sampler = torch.utils.data.distributed.DistributedSampler(train_dataset)
+    data_loader = torch.utils.data.DataLoader(
+        train_dataset, batch_size=args.batch_size, shuffle=(train_sampler is None),
+        num_workers=args.workers, pin_memory=True, sampler=train_sampler, drop_last=True)
 
     _mean = torch.tensor((0.485, 0.456, 0.406)).view(1,3,1,1).cuda(non_blocking=True)
     _std = torch.tensor((0.229, 0.224, 0.225)).view(1,3,1,1).cuda(non_blocking=True)
