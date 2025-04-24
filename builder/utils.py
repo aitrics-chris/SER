@@ -615,89 +615,6 @@ class LARS_BT(torch.optim.Optimizer):
 
                 p.add_(mu, alpha=-g['lr'])
 
-class MultiCropWrapper(nn.Module):
-    """
-    Perform forward pass separately on each resolution input.
-    The inputs corresponding to a single resolution are clubbed and single
-    forward is run on the same resolution inputs. Hence we do several
-    forward passes = number of different resolutions used. We then
-    concatenate all the output features and run the head forward on these
-    concatenated features.
-    """
-    def __init__(self, backbone, args, head, if_projector_equiv):
-        super(MultiCropWrapper, self).__init__()
-        # disable layers dedicated to ImageNet labels classification
-        backbone.fc, backbone.head = nn.Identity(), nn.Identity()
-        self.backbone = backbone
-        self.head = head
-
-        if if_projector_equiv:
-            layers = []
-            layers.append(nn.Conv2d(384, 512, kernel_size=1, bias=False))
-            layers.append(nn.GELU())
-            # layers.append(nn.ReLU())
-            layers.append(nn.Conv2d(512, 512, kernel_size=1, bias=False))
-            # layers.append(nn.Conv2d(128, 128, kernel_size=1, bias=False))
-            self.projector_equiv = nn.Sequential(*layers)
-
-        # if args.if_equiv:
-        #     backbone.forward = backbone.forward_inv_
-        # else:
-        #     backbone.forward = backbone.forward_baseline
-
-    
-    def set_projector_equiv(self, projector_equiv):
-        self.projector_equiv = projector_equiv
-            
-    def inv(self, x):
-        feat_inv = []
-        for _x in x:
-            _cls = self.backbone.forward_inv_(_x)            
-            # accumulate outputs
-            feat_inv.append(_cls)
-        with torch.autocast(device_type="cuda"):
-            feat_inv = self.head(torch.cat(feat_inv))
-        return feat_inv
-
-        # feat_inv = list(map(self.backbone.forward_inv_, x))
-        # # feat_instances = self.head(torch.cat(feat_instances[:idx_crops], dim=0))
-        # with torch.autocast(device_type="cuda"):
-        #     feat_inv = self.head(torch.cat(feat_inv))
-
-        # return feat_inv    
-
-    def hybrid(self, x, idx_equiv=[1,3], idx_inv=[0,2]):
-        feat_inv = []
-        feat_equiv = []
-        for _idx in range(4):
-            if _idx in idx_inv:
-                _cls = self.backbone.forward_inv_(x[_idx])
-                feat_inv.append(_cls)
-            elif _idx in idx_equiv:
-                _cls, _equiv = self.backbone.forward_equiv(x[_idx])
-                feat_inv.append(_cls)
-                feat_equiv.append(_equiv)
-                    
-        with torch.autocast(device_type="cuda"):
-            feat_inv = self.head(torch.cat(feat_inv))
-            for i in range(len(feat_equiv)):
-                feat_equiv[i] = self.projector_equiv(feat_equiv[i])
-        return feat_inv, feat_equiv
-        ###############################
-        
-        # instance_global = map(self.backbone.forward_equiv, x[:idx_equiv])        
-        # feat_inv, feat_equiv = zip(*instance_global)
-        # feat_inv = list(feat_inv)
-        # feat_equiv = list(feat_equiv)
-        
-        # feat_inv.extend(list(map(self.backbone.forward_inv_, x[idx_equiv:])))
-        # with torch.cuda.amp.autocast():
-        #     feat_inv = self.head(torch.cat(feat_inv))
-        #     for i in range(len(feat_equiv)):
-        #         feat_equiv[i] = self.projector_equiv(feat_equiv[i])
-
-        # return feat_inv, feat_equiv
-
     
 def base_scheduler(epochs, niter_per_ep):
     '''
@@ -982,6 +899,13 @@ class Aug_equi(nn.Module):
                                         kornia.augmentation.RandomGaussianBlur(kernel_size=(9, 9), sigma=(0.1, 2.0), same_on_batch=False, p=0.1),
                                         kornia.augmentation.RandomSolarize(thresholds=0.5, additions=0, same_on_batch=False, p=0.2) # different from the original implementation (followed Kornia library default)
                                     )
+        
+        if args.equiv_mode == 'essl':
+            self.inv3 = ImageSequential(            
+                                        kornia.augmentation.ColorJiggle(0.4, 0.4, 0.2, 0.1, same_on_batch=False, p=0.8),  # not strengthened                                        
+                                        kornia.augmentation.RandomGrayscale(same_on_batch=False, p=0.2),
+                                        kornia.augmentation.RandomGaussianBlur(kernel_size=(9, 9), sigma=(0.1, 2.0), same_on_batch=False, p=0.1),
+                                        )
                 
         self.seed_generator = torch.Generator()
         self.seed_generator.manual_seed(seed)           
@@ -1013,6 +937,9 @@ class Aug_equi(nn.Module):
     
     def aug_inv2(self, x):
         return self.inv2(x)
+    
+    def aug_rotate(self, x):
+        return self.inv3(x)
     
     def aug_equiv(self, x, w, h, degrees, flips, num_rot90_pergpu):
         x = torch.cat(list(map(self.rotate, torch.split(x, 1), degrees, flips)), dim=0)

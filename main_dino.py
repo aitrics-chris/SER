@@ -120,7 +120,7 @@ def get_args_parser():
     parser.add_argument("--local-rank", default=0, type=int, help="Please ignore and do not set this argument.")
     
     # Equiv
-    parser.add_argument('--equiv-mode', default='erl', choices=['erl', 'essl', 'stl', 'equimod', 'augself', 'inv'], type=str, help='equivariance mode, erl is ours')
+    parser.add_argument('--equiv-mode', default='essl', choices=['erl', 'essl', 'stl', 'equimod', 'augself', 'inv'], type=str, help='equivariance mode, erl is ours')
     parser.add_argument('--equiv-scale', type=float, nargs='+', default=(0.7, 1.3),
             help="""Scale range of the cropped image before resizing, relatively to the origin image.
             Used for small local view cropping of multi-crop.""")    
@@ -129,7 +129,7 @@ def get_args_parser():
             Used for small local view cropping of multi-crop.""")
     
     parser.add_argument('--equiv-lambda', type=float, default=0.3, help="""lambda for equivariance loss" """)
-    parser.add_argument('--equiv-layer', default=3, type=int, help='layer to impose equiv')
+    parser.add_argument('--equiv-layer', default=12, type=int, help='layer to impose equiv')
 
     ## For equiv sampler scheduler
     parser.add_argument('--warmup-epochs-scheduler', default=0, type=int, help='number of warmup epochs for scheduler')
@@ -285,8 +285,7 @@ def train_dino(args):
         )
 
 
-    proj_name = f'DINO_{args.equiv_mode}_{args.arch}_{args.lr}_clipgrad_{args.clip_grad}_{socket.gethostname()}_ep{args.epochs}_{args.tag}' if args.equiv_mode != 'erl' else f'DINO_{args.equiv_mode}_{args.arch}' \
-        +f'_{args.lr}_{args.equiv_mode}_{args.equiv_scale[0]}_{args.equiv_scale[1]}_{round(args.equiv_aspect_ratio[0],2)}_{args.equiv_lambda}_{args.equiv_layer}_{args.warmup_epochs_scheduler}' \
+    proj_name = f'DINO_{args.equiv_mode}_{args.arch}_{args.lr}_{args.equiv_mode}_{args.equiv_scale[0]}_{args.equiv_scale[1]}_{round(args.equiv_aspect_ratio[0],2)}_{args.equiv_lambda}_{args.equiv_layer}_{args.warmup_epochs_scheduler}' \
             +f'_{args.rest_epochs_scheduler}_{args.equiv_ratio_start}_{args.equiv_ratio_end}_clipgrad_{args.clip_grad}_{args.temperature}_{socket.gethostname()}_ep{args.epochs}_{args.tag}'
 
 
@@ -382,7 +381,7 @@ def train_one_epoch(student, teacher, teacher_without_ddp, dino_loss, data_loade
 
         # EMA update for the teacher
         with torch.no_grad():
-            m = momentum_schedule[step_all]  # momentum parameter
+            m = momentum_schedule[step_all]  # momentum parameter <- teacher
             for param_q, param_k in zip(student.module.parameters(), teacher_without_ddp.parameters()):
                 param_k.data.mul_(m).add_((1 - m) * param_q.detach().data)
 

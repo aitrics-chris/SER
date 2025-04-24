@@ -6,6 +6,7 @@ import math
 import random
 import torchvision.transforms.functional as tf
 import os
+from typing import List
 
 def get_dataset_inv(args):
     # ColorJitter, RandomGrayscale, GaussianBlur, Solarize will be performed using Kornia at GPU. See build.utils.Aug_equi.py
@@ -36,20 +37,19 @@ def get_dataset_inv(args):
     ]
 
     return datasets.ImageFolder(os.path.join(args.data, 'train'),
-        TwoCropsTransform(transforms.Compose(augmentation1), transforms.Compose(augmentation2)))
+        MultiCropsTransform([transforms.Compose(augmentation1), transforms.Compose(augmentation2)]))
     
 
-
-class TwoCropsTransform:
+class MultiCropsTransform:
     """Take two random crops of one image"""
 
-    def __init__(self, base_transform1, base_transform2):
-        self.base_transform = [base_transform1, base_transform2]
+    def __init__(self, base_transforms: List[transforms.Compose]):
+        self.base_transforms = base_transforms
         # self.base_transform2 = base_transform2
 
     def __call__(self, x):
         # im1 = self.base_transform1(x)
         # im2 = self.base_transform2(x)
         # return [im1, im2]
-        return [self.base_transform[i](x) for i in range(2)]
+        return [_base_transform(x) for _base_transform in self.base_transforms]
 

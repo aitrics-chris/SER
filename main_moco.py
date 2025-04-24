@@ -104,7 +104,7 @@ parser.add_argument('--equiv-aspect-ratio', type=float, nargs='+', default=(3./4
 # parser.add_argument('--fixed-ratio', type=float, default=0.5, help="""Ratio of minibatch for equivariance loss""")
 parser.add_argument('--equiv-lambda', type=float, default=3.0, help="""lambda for equivariance loss" """)
 # parser.add_argument('--equiv-ratio', type=float, default=0.5, help="""Ratio of minibatch for equivariance loss""")
-parser.add_argument('--equiv-mode', default='erl', choices=['erl', 'essl', 'stl', 'equimod', 'augself', 'inv'], type=str, help='equivariance mode, erl is ours')
+parser.add_argument('--equiv-mode', default='essl', choices=['erl', 'essl', 'stl', 'equimod', 'augself', 'inv'], type=str, help='equivariance mode, erl is ours')
 parser.add_argument('--equiv-layer', default=3, type=int, help='layer to impose equiv')
 
 ## For equiv sampler scheduler
@@ -145,9 +145,6 @@ def main():
                     'which can slow down your training considerably! '
                     'You may see unexpected behavior when restarting '
                     'from checkpoints.')
-
-    ngpus_per_node = torch.cuda.device_count()
-
 
     if 'RANK' in os.environ and 'WORLD_SIZE' in os.environ:
         args.rank = int(os.environ["RANK"])
@@ -269,14 +266,13 @@ def main():
                 }    
     
     # proj_name = 'ex'
-    proj_name = f'MoCo_{ssl_type}_{args.arch}_{args.lr}_clipgrad_{args.clip_grad}_{socket.gethostname()}_ep{args.epochs}_{args.tag}' if args.equiv_mode != 'erl' else f'MoCo_{args.equiv_mode}_{args.arch}_{args.lr}' \
-        +f'_{args.equiv_scale[0]}_{args.equiv_scale[1]}_{round(args.equiv_aspect_ratio[0],2)}_{args.equiv_lambda}_{args.ratio_type_equiv}' \
+    proj_name = f'MoCo_{args.equiv_mode}_{args.arch}_{args.lr}_{args.equiv_scale[0]}_{args.equiv_scale[1]}_{round(args.equiv_aspect_ratio[0],2)}_{args.equiv_lambda}_{args.ratio_type_equiv}' \
             +f'_{args.equiv_layer}_{args.warmup_epochs_scheduler}_{args.rest_epochs_scheduler}_{args.equiv_ratio_start}_{args.equiv_ratio_end}_clipgrad_{args.clip_grad}_{args.temperature_equiv}_{socket.gethostname()}_ep{args.epochs}_{args.tag}'
     
     # dir1 = os.path.join(args.output_dir, ssl_type, proj_name)
     # os.makedirs(dir1, exist_ok=True)
     # save_on_master(save_dict, os.path.join(dir1, f'checkpoint_{args.batch_size}_{args.lr}.pth'))
-    dir2 = os.path.join('/nfs/thena/chris/icml/ckpt_moco', ssl_type, proj_name)
+    dir2 = os.path.join('/nfs/thena/chris/icml/ckpt_moco', args.equiv_mode, proj_name)
     os.makedirs(dir2, exist_ok=True)
     save_on_master(save_dict, os.path.join(dir2, f'checkpoint_{args.batch_size}_{args.lr}.pth'))
     
@@ -336,8 +332,8 @@ def train(data_loader, model, optimizer, scaler, summary_writer, epoch, args, _m
         moco_m = adjust_moco_momentum(epoch + i / iters_per_epoch, args)
 
         if args.gpu is not None:
-            images[0] = images[0].cuda(args.gpu, non_blocking=True)
-            images[1] = images[1].cuda(args.gpu, non_blocking=True)
+            for i in range(len(images)):
+                images[i] = images[i].cuda(args.gpu, non_blocking=True)
 
         # return overall loss
         loss, loss_inv, loss_equiv, _loss_list_inv, _loss_list_equiv = train_one_step(model, images, inv_samples_num, aug_equi, _mean, _std, moco_m, _loss_list_inv, _loss_list_equiv, args)

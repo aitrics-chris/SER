@@ -7,8 +7,8 @@ import torch.nn as nn
 
 def train_inv(student, teacher, teacher_without_ddp, images, aug_equi, _mean, _std, epoch, dino_loss, loss_list_inv, loss_list_equiv, inv_samples_num, equiv_samples_num, args):
 
-    student.module.forward = student.module.inv
-    teacher_without_ddp.forward = teacher_without_ddp.inv
+    student.module.forward = student.module.ssl
+    teacher_without_ddp.forward = teacher_without_ddp.ssl
 
     ################# Inv: 2-augmentation (color) ###############
     with torch.no_grad():
@@ -59,8 +59,8 @@ def train_erl(student, teacher, teacher_without_ddp, images, aug_equi, _mean, _s
     images.insert(1, images_equiv_0)
     images.insert(3, images_equiv_1)
 
-    teacher_without_ddp.forward = teacher_without_ddp.hybrid
-    student.module.forward = student.module.hybrid
+    teacher_without_ddp.forward = teacher_without_ddp.erl
+    student.module.forward = student.module.erl
     with torch.autocast(device_type="cuda"):
         teacher_cls, teacher_equiv = teacher(images)             
         student_cls, student_equiv = student(images)
@@ -146,8 +146,50 @@ def train_erl(student, teacher, teacher_without_ddp, images, aug_equi, _mean, _s
 
 
 def train_essl(student, teacher, teacher_without_ddp, images, aug_equi, _mean, _std, epoch, dino_loss, loss_list_inv, loss_list_equiv, inv_samples_num, equiv_samples_num, args):
-    pass
-    # return loss, loss_inv, loss_equiv, loss_list_inv, loss_list_equiv
+    student.module.forward = student.module.ssl
+    teacher_without_ddp.forward = teacher_without_ddp.ssl
+
+    ################# Inv: 2-augmentation (color) ###############
+    with torch.no_grad():
+        images[0] = aug_equi.aug_inv1(images[0]).sub_(_mean).div_(_std)
+        images[1] = aug_equi.aug_inv2(images[1]).sub_(_mean).div_(_std)
+        images_rotate = aug_equi.aug_rotate(images[2]).sub_(_mean).div_(_std)
+
+        nimages = images_rotate.shape[0]
+        n_rot_images = 4 * nimages
+
+        # rotate images all 4 ways at once
+        rotated_images = torch.zeros([n_rot_images, images_rotate.shape[1], images_rotate.shape[2], images_rotate.shape[3]]).cuda(args.gpu, non_blocking=True)
+        rotated_labels = torch.zeros([n_rot_images]).long().cuda(args.gpu, non_blocking=True)
+
+        rotated_images[:nimages] = images_rotate
+        # rotate 90
+        rotated_images[nimages:2 * nimages] = images_rotate.flip(3).transpose(2, 3)
+        rotated_labels[nimages:2 * nimages] = 1
+        # rotate 180
+        rotated_images[2 * nimages:3 * nimages] = images_rotate.flip(3).flip(2)
+        rotated_labels[2 * nimages:3 * nimages] = 2
+        # rotate 270
+        rotated_images[3 * nimages:4 * nimages] = images_rotate.transpose(2, 3).flip(3)
+        rotated_labels[3 * nimages:4 * nimages] = 3
+    ################# images[0], images[1] ################
+
+    # teacher and student forward passes + compute dino loss
+    with torch.autocast(device_type="cuda"):
+        teacher_output = teacher(images[:2])  # only the 2 global views pass through the teacher
+        student_output = student(images[:2])
+        loss_inv = dino_loss(student_output, teacher_output, epoch)
+
+        student.module.forward = student.module.essl
+        logit_equiv = student(rotated_images)
+        loss_equiv = torch.nn.functional.cross_entropy(logit_equiv, rotated_labels)        
+        loss = loss_inv + (loss_equiv * args.equiv_lambda)
+    
+    if dist.get_rank() == 0:
+        loss_list_equiv.append(loss_equiv.item())
+        loss_list_inv.append(loss_inv.item())
+
+    return loss, loss_inv, loss_equiv, loss_list_inv, loss_list_equiv
 
 
 def train_stl(student, teacher, teacher_without_ddp, images, aug_equi, _mean, _std, epoch, dino_loss, loss_list_inv, loss_list_equiv, inv_samples_num, equiv_samples_num, args):
@@ -189,7 +231,17 @@ class MultiCropWrapper(nn.Module):
             layers.append(nn.Conv2d(512, 512, kernel_size=1, bias=False))
             # layers.append(nn.Conv2d(128, 128, kernel_size=1, bias=False))
             self.projector_equiv = nn.Sequential(*layers)
-    
+        elif args.equiv_mode == 'essl':
+            self.projector_equiv = nn.Sequential(nn.Linear(384, 384),
+                                                    nn.LayerNorm(384),
+                                                    nn.ReLU(inplace=True),  # first layer
+                                                    nn.Linear(384, 384),
+                                                    nn.LayerNorm(384),
+                                                    nn.ReLU(inplace=True),  # second layer
+                                                    nn.Linear(384, 256),
+                                                    nn.LayerNorm(256),
+                                                    nn.Linear(256, 4))  # output layer
+        
     def set_projector_equiv(self, projector_equiv):
         self.projector_equiv = projector_equiv
             
@@ -202,9 +254,21 @@ class MultiCropWrapper(nn.Module):
         with torch.autocast(device_type="cuda"):
             feat_inv = self.head(torch.cat(feat_inv))
         return feat_inv
- 
+    
+    def ssl(self, x):
+        feat_inv = []
+        for _x in x:
+            _cls = self.backbone.forward_baseline(_x)            
+            # accumulate outputs
+            feat_inv.append(_cls)
+        with torch.autocast(device_type="cuda"):
+            feat_inv = self.head(torch.cat(feat_inv))
+        return feat_inv
+    
+    def essl(self, x):
+        return self.projector_equiv(self.backbone.forward_baseline(x))
 
-    def hybrid(self, x, idx_equiv=[1,3], idx_inv=[0,2]):
+    def erl(self, x, idx_equiv=[1,3], idx_inv=[0,2]):
         feat_inv = []
         feat_equiv = []
         for _idx in range(4):
@@ -221,3 +285,4 @@ class MultiCropWrapper(nn.Module):
             for i in range(len(feat_equiv)):
                 feat_equiv[i] = self.projector_equiv(feat_equiv[i])
         return feat_inv, feat_equiv
+    

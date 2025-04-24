@@ -41,6 +41,47 @@ def train_erl(model, images, inv_samples_num, aug_equi, _mean, _std, moco_m, los
 
     return loss, loss_inv, loss_equiv, loss_list_inv, loss_list_equiv
 
+
+def train_essl(model, images, inv_samples_num, aug_equi, _mean, _std, moco_m, loss_list_inv, loss_list_equiv, args):
+    model.module.forward = model.module.inv
+    with torch.no_grad():
+        images_inv_0 = aug_equi.aug_inv1(images[0]).sub_(_mean).div_(_std)
+        images_inv_1 = aug_equi.aug_inv2(images[1]).sub_(_mean).div_(_std)
+        images_rotate = aug_equi.aug_rotate(images[2]).sub_(_mean).div_(_std)
+
+        nimages = images_rotate.shape[0]
+        n_rot_images = 4 * nimages
+
+        # rotate images all 4 ways at once
+        rotated_images = torch.zeros([n_rot_images, images_rotate.shape[1], images_rotate.shape[2], images_rotate.shape[3]]).cuda(args.gpu, non_blocking=True)
+        rotated_labels = torch.zeros([n_rot_images]).long().cuda(args.gpu, non_blocking=True)
+
+        rotated_images[:nimages] = images_rotate
+        # rotate 90
+        rotated_images[nimages:2 * nimages] = images_rotate.flip(3).transpose(2, 3)
+        rotated_labels[nimages:2 * nimages] = 1
+        # rotate 180
+        rotated_images[2 * nimages:3 * nimages] = images_rotate.flip(3).flip(2)
+        rotated_labels[2 * nimages:3 * nimages] = 2
+        # rotate 270
+        rotated_images[3 * nimages:4 * nimages] = images_rotate.transpose(2, 3).flip(3)
+        rotated_labels[3 * nimages:4 * nimages] = 3
+    
+    with torch.autocast(device_type="cuda"):
+        loss_inv = model(images_inv_0, images_inv_1, moco_m)
+
+        model.module.forward = model.module.forward_essl
+        logit_equiv = model(rotated_images)
+        loss_equiv = torch.nn.functional.cross_entropy(logit_equiv, rotated_labels)        
+        loss = loss_inv + (loss_equiv * args.equiv_lambda)
+
+    if args.rank == 0:
+        loss_list_equiv.append(loss_equiv.item())
+        loss_list_inv.append(loss_inv.item())
+        
+    return loss, loss_inv, loss_equiv, loss_list_inv, loss_list_equiv
+
+
 class MoCo(nn.Module):
     """
     Build a MoCo model with a base encoder, a momentum encoder, and two MLPs
@@ -70,7 +111,17 @@ class MoCo(nn.Module):
             # layers.append(nn.ReLU())
             layers.append(nn.Conv2d(512, 512, kernel_size=1, bias=False))
             # layers.append(nn.Conv2d(128, 128, kernel_size=1, bias=False))
-            self.projector_equiv = nn.Sequential(*layers)            
+            self.projector_equiv = nn.Sequential(*layers)        
+        elif args.equiv_mode == 'essl':
+            self.projector_equiv = nn.Sequential(nn.Linear(384, 384),
+                                                    nn.LayerNorm(384),
+                                                    nn.ReLU(inplace=True),  # first layer
+                                                    nn.Linear(384, 384),
+                                                    nn.LayerNorm(384),
+                                                    nn.ReLU(inplace=True),  # second layer
+                                                    nn.Linear(384, 256),
+                                                    nn.LayerNorm(256),
+                                                    nn.Linear(256, 4))  # output layer    
 
         for param_b, param_m in zip(self.base_encoder.parameters(), self.momentum_encoder.parameters()):
             param_m.data.copy_(param_b.data)  # initialize
@@ -145,6 +196,18 @@ class MoCo(nn.Module):
             k2 = self.momentum_encoder.forward_inv(x2)
 
         return q1, q2, k1, k2
+
+    def forward_essl(self, x):
+        """
+        Input:
+            x: rotated image
+        Output:
+            logit
+        """
+
+        # compute features
+        return self.projector_equiv(self.base_encoder.forward_inv(x))
+
     
     def loss_inv(self, q1, q2, k1, k2):
         """
