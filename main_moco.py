@@ -1,8 +1,6 @@
 import argparse
-import builtins
 import math
 import os
-import random
 import shutil
 import time
 import warnings
@@ -14,15 +12,11 @@ import torch.nn.parallel
 import torch.backends.cudnn as cudnn
 import torch.distributed as dist
 import torch.optim
-import torch.multiprocessing as mp
 import torch.utils.data
 import torch.utils.data.distributed
-import torchvision.transforms as transforms
-import torchvision.datasets as datasets
-import torchvision.models as torchvision_models
 from torch.utils.tensorboard import SummaryWriter
 from tqdm import trange
-
+import loader as loaders
 # import moco.builder
 # import moco.loader
 # import moco.optimizer
@@ -32,7 +26,6 @@ import resnet as resnets
 import sys
 # import vits
 import numpy as np
-# from utils import Aug_equi, cosine_scheduler_descend, cosine_scheduler_ascend, constant_scheduler, base_scheduler, clip_gradients
 import builder.utils as utils
 import builder.moco as moco
 import copy
@@ -100,7 +93,7 @@ parser.add_argument('--optimizer', default='adamw', type=str,
 parser.add_argument('--warmup-epochs', default=10, type=int, metavar='N',
                     help='number of warmup epochs')
 parser.add_argument('--crop-min', default=0.08, type=float,
-                    help='minimum scale for random cropping (default: 0.08)')
+                    help='minimum scale for random cropping (0.25 for dino, 0.08 for both moco and barlowtwins)')
 parser.add_argument('--output_dir', default="/home/chris/codes/erl/results", type=str, help='Path to save logs and checkpoints.')
 parser.add_argument('--equiv-scale', type=float, nargs='+', default=(0.7, 1.3),
         help="""Scale range of the cropped image before resizing, relatively to the origin image.
@@ -187,8 +180,17 @@ def main():
         args.rank, args.dist_url), flush=True)
     dist.barrier(device_ids=[torch.cuda.current_device()])
     setup_for_distributed(args.rank == 0)
+    cudnn.benchmark = True
 
-
+    # ============ preparing data ... ============
+    args.data_mode = args.equiv_mode if args.equiv_mode != 'erl' else 'inv'
+    train_dataset = loaders.__dict__[f'get_dataset_{args.data_mode}'](args)
+    train_sampler = torch.utils.data.distributed.DistributedSampler(train_dataset)
+    data_loader = torch.utils.data.DataLoader(
+        train_dataset, batch_size=args.batch_size, shuffle=(train_sampler is None),
+        num_workers=args.workers, pin_memory=True, sampler=train_sampler, drop_last=True)
+    
+    # ============ building networks ... ============
     print("=> creating model '{}'".format(args.arch))
     if args.arch.startswith('vit'):
         model = moco.MoCo_ViT(args,
@@ -197,17 +199,15 @@ def main():
         args.stride = 16
     else:
         raise NotImplementedError
-
-    # infer learning rate before changing batch size
-    args.lr = args.lr * args.batch_size / 256
-
-    # apply SyncBN
+    
     model = torch.nn.SyncBatchNorm.convert_sync_batchnorm(model)
     model.cuda(args.gpu)
     args.batch_size = int(args.batch_size / args.world_size)
     model = torch.nn.parallel.DistributedDataParallel(model, device_ids=[args.gpu], find_unused_parameters=True if args.equiv_mode == 'erl' else False)
 
 
+    # infer learning rate before changing batch size
+    args.lr = args.lr * args.batch_size / 256
     if args.optimizer == 'lars':
         optimizer = moco.LARS(model.parameters(), args.lr,
                                         weight_decay=args.weight_decay,
@@ -219,51 +219,7 @@ def main():
     scaler = torch.GradScaler(device="cuda")
     summary_writer = SummaryWriter() if args.rank == 0 else None
 
-    cudnn.benchmark = True
 
-    # Data loading code
-    traindir = os.path.join(args.data, 'train')
-
-    # follow BYOL's augmentation recipe: https://arxiv.org/abs/2006.07733
-    augmentation1 = [
-        transforms.RandomResizedCrop(224, scale=(args.crop_min, 1.)),
-        # transforms.RandomApply([
-        #     transforms.ColorJitter(0.4, 0.4, 0.2, 0.1)  # not strengthened
-        # ], p=0.8),
-        # transforms.RandomGrayscale(p=0.2),
-        # transforms.RandomApply([moco.loader.GaussianBlur([.1, 2.])], p=1.0),
-        transforms.RandomHorizontalFlip(),
-        transforms.ToTensor(),
-        # normalize
-    ]
-
-    augmentation2 = [
-        transforms.RandomResizedCrop(224, scale=(args.crop_min, 1.)),
-        # transforms.RandomApply([
-        #     transforms.ColorJitter(0.4, 0.4, 0.2, 0.1)  # not strengthened
-        # ], p=0.8),
-        # transforms.RandomGrayscale(p=0.2),
-        # transforms.RandomApply([moco.loader.GaussianBlur([.1, 2.])], p=0.1),
-        # transforms.RandomApply([moco.loader.Solarize()], p=0.2),
-        transforms.RandomHorizontalFlip(),
-        transforms.ToTensor(),
-        # normalize
-    ]
-
-    train_dataset = datasets.ImageFolder(
-        traindir,
-        moco.TwoCropsTransform(transforms.Compose(augmentation1), 
-                                      transforms.Compose(augmentation2)))
-
-    # if args.distributed:
-    train_sampler = torch.utils.data.distributed.DistributedSampler(train_dataset)
-    # else:
-    #     train_sampler = None
-
-    data_loader = torch.utils.data.DataLoader(
-        train_dataset, batch_size=args.batch_size, shuffle=(train_sampler is None),
-        num_workers=args.workers, pin_memory=True, sampler=train_sampler, drop_last=True)
-    
     _mean = torch.tensor((0.485, 0.456, 0.406)).view(1,3,1,1).cuda(non_blocking=True)
     _std = torch.tensor((0.229, 0.224, 0.225)).view(1,3,1,1).cuda(non_blocking=True)
     aug_equi = utils.Aug_equi(args.gpu, args)

@@ -14,7 +14,6 @@ import torch.nn as nn
 import torch.distributed as dist
 import torch.backends.cudnn as cudnn
 import torch.nn.functional as F
-from torchvision import datasets, transforms
 from torchvision import models as torchvision_models
 
 # from datetime import datetime
@@ -27,6 +26,7 @@ from vision_transformer import DINOHead
 # from utils import Aug_equi, cosine_scheduler_ascend, cosine_scheduler_descend, constant_scheduler, base_scheduler, gather_from_all, concat_all_gather
 from tqdm import trange
 import socket
+import loader as loaders
 import builder.dino as ssls
 torchvision_archs = sorted(name for name in torchvision_models.__dict__
     if name.islower() and not name.startswith("__")
@@ -34,6 +34,8 @@ torchvision_archs = sorted(name for name in torchvision_models.__dict__
 
 def get_args_parser():
     parser = argparse.ArgumentParser('DINO', add_help=False)
+    parser.add_argument('--data', default='/home/chris/storage/imagenet_eval/', type=str,
+        help='Please specify path to the ImageNet training data.')
 
     # Model parameters
     parser.add_argument('--arch', default='vit_small', type=str,
@@ -100,10 +102,8 @@ def get_args_parser():
     parser.add_argument('--drop_path_rate', type=float, default=0.1, help="stochastic depth rate")
 
     # Multi-crop parameters
-    parser.add_argument('--global_crops_scale', type=float, nargs='+', default=(0.25, 1.),
-        help="""Scale range of the cropped image before resizing, relatively to the origin image.
-        Used for large global view cropping. When disabling multi-crop (--local_crops_number 0), we
-        recommand using a wider range of scale ("--global_crops_scale 0.14 1." for example)""")
+    parser.add_argument('--crop-min', default=0.25, type=float,
+                    help='minimum scale for random cropping (0.25 for dino, 0.08 for both moco and barlowtwins)')
     parser.add_argument('--local_crops_number', type=int, default=0, help="""Number of small
         local views to generate. Set this parameter to 0 to disable multi-crop training.
         When disabling multi-crop we recommend to use "--global_crops_scale 0.14 1." """)
@@ -112,8 +112,6 @@ def get_args_parser():
         Used for small local view cropping of multi-crop.""")
 
     # Misc
-    parser.add_argument('--data_path', default='/home/chris/storage/imagenet_eval/train/', type=str,
-        help='Please specify path to the ImageNet training data.')
     parser.add_argument('--output_dir', default="/home/chris/codes/erl/results", type=str, help='Path to save logs and checkpoints.')
     parser.add_argument('--seed', default=0, type=int, help='Random seed.')
     parser.add_argument('--num_workers', default=4, type=int, help='Number of data loading workers per GPU.')
@@ -158,20 +156,18 @@ def train_dino(args):
     cudnn.benchmark = True
 
     # ============ preparing data ... ============
-    transform = DataAugmentationDINO(
-        args.global_crops_scale
-    )
-    dataset = datasets.ImageFolder(args.data_path, transform=transform)
-    sampler = torch.utils.data.DistributedSampler(dataset, shuffle=True)
+    args.data_mode = args.equiv_mode if args.equiv_mode != 'erl' else 'inv'
+    train_dataset = loaders.__dict__[f'get_dataset_{args.data_mode}'](args)
+    sampler = torch.utils.data.DistributedSampler(train_dataset, shuffle=True)
     data_loader = torch.utils.data.DataLoader(
-        dataset,
+        train_dataset,
         sampler=sampler,
         batch_size=args.batch_size_per_gpu,
         num_workers=args.num_workers,
         pin_memory=True,
         drop_last=True,
     )
-    print(f"Data loaded: there are {len(dataset)} images.")
+    print(f"Data loaded: there are {len(train_dataset)} images.")
 
     # ============ building student and teacher networks ... ============
     if args.arch == 'vit_small':
@@ -461,23 +457,23 @@ class DINOLoss(nn.Module):
         self.center = self.center * self.center_momentum + batch_center * (1 - self.center_momentum)
 
 
-class DataAugmentationDINO(object):
-    def __init__(self, global_crops_scale):
-        self.global_transfo1 = transforms.Compose([
-            transforms.RandomResizedCrop(224, scale=global_crops_scale, interpolation=Image.BICUBIC),
-            transforms.RandomHorizontalFlip(p=0.5),
-            transforms.ToTensor(),
-        ])
-        self.global_transfo2 = transforms.Compose([
-            transforms.RandomResizedCrop(224, scale=global_crops_scale, interpolation=Image.BICUBIC),
-            transforms.RandomHorizontalFlip(p=0.5),
-            transforms.ToTensor(),
-        ])
+# class DataAugmentationDINO(object):
+#     def __init__(self, global_crops_scale):
+#         self.global_transfo1 = transforms.Compose([
+#             transforms.RandomResizedCrop(224, scale=global_crops_scale, interpolation=Image.BICUBIC),
+#             transforms.RandomHorizontalFlip(p=0.5),
+#             transforms.ToTensor(),
+#         ])
+#         self.global_transfo2 = transforms.Compose([
+#             transforms.RandomResizedCrop(224, scale=global_crops_scale, interpolation=Image.BICUBIC),
+#             transforms.RandomHorizontalFlip(p=0.5),
+#             transforms.ToTensor(),
+#         ])
 
-    def __call__(self, image):
-        crops = []
-        crops.extend([tf(image) for tf in [self.global_transfo1, self.global_transfo2]])
-        return crops
+#     def __call__(self, image):
+#         crops = []
+#         crops.extend([tf(image) for tf in [self.global_transfo1, self.global_transfo2]])
+#         return crops
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser('DINO', parents=[get_args_parser()])
