@@ -1016,6 +1016,7 @@ def concat_all_gather(tensor, size):
     Performs all_gather operation on the provided tensors.
     *** Warning ***: torch.distributed.all_gather has no gradient.
     """
+    tensor = tensor.contiguous()
     tensor_shape_gather = [torch.empty(size, dtype=torch.int64, device=dist.get_rank(), requires_grad=False)
         for _rank in range(torch.distributed.get_world_size())]
     tensor_shape = torch.tensor(tensor.shape, device=dist.get_rank(), requires_grad=False)

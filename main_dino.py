@@ -151,6 +151,7 @@ def get_args_parser():
     parser.add_argument('--stl-temperature', type=float, default=0.2, help='temperature for STL')
 
     # EquiMod
+    parser.add_argument('--equimod-temperature', type=float, default=0.2) # temperature for equivariance loss
     parser.add_argument('--equimod-inv-weight', type=float, default=1.0, help='Weight for the invariance loss component in EquiMod')
     parser.add_argument('--equimod-equi-weight', type=float, default=1.0, help='Weight for the equivariance loss component in EquiMod')
     parser.add_argument('--equimod-proj-head-eq-layers', default="2048-2048-", help='Size of layers of equivariant projection head in EquiMod')
@@ -203,16 +204,24 @@ def train_dino(args):
         print(f"Unknown architecture: {args.arch}")
 
     # multi-crop wrapper handles forward with inputs of different resolutions
-    student = dino.MultiCropWrapper(student, args, DINOHead(
-        embed_dim,
-        args.out_dim,
-        use_bn=args.use_bn_in_head,
-        norm_last_layer=args.norm_last_layer,
-    ))
+    student = dino.MultiCropWrapper(
+        student,
+        args,
+        DINOHead(embed_dim, args.out_dim, use_bn=args.use_bn_in_head, norm_last_layer=args.norm_last_layer)
+    )
     teacher = dino.MultiCropWrapper(
-        teacher, args,
+        teacher,
+        args,
         DINOHead(embed_dim, args.out_dim, args.use_bn_in_head)
     )
+
+    if args.equiv_mode == 'erl':
+        teacher.set_projector_equiv(student.projector_equiv)
+    elif args.equiv_mode == 'equimod':
+        from builder.equimod import EquiModTransformModule
+        student.transform_module = EquiModTransformModule(embed_dim, args)
+        teacher.transform_module = EquiModTransformModule(embed_dim, args)
+
     # move networks to gpu
     student, teacher = student.cuda(), teacher.cuda()
     # synchronize batch norms (if any)
@@ -226,51 +235,19 @@ def train_dino(args):
     else:
         # teacher_without_ddp and teacher are the same thing
         teacher_without_ddp = teacher
-
     # if ((args.ratio_type_equiv == 'fix') and (args.warmup_epochs_scheduler == 0) and (args.rest_epochs_scheduler == 0)) or (args.ratio_type_equiv == 'base'):
     #     student = nn.parallel.DistributedDataParallel(student, device_ids=[args.gpu])
     # else:
         # student = nn.parallel.DistributedDataParallel(student, device_ids=[args.gpu], find_unused_parameters=True)
     student = nn.parallel.DistributedDataParallel(student, device_ids=[args.gpu], find_unused_parameters=True)
+    # teacher = nn.parallel.DistributedDataParallel(teacher, device_ids=[args.gpu], find_unused_parameters=True)
         
-    # teacher and student start with the same weights
+    # teacher and student start with the same weiƒghts
     teacher_without_ddp.load_state_dict(student.module.state_dict(), strict=False)
     # there is no backpropagation through the teacher, so no need for gradients
     for p in teacher.parameters():
         p.requires_grad = False
     print(f"Student and Teacher are built: they are both {args.arch} network.")
-    if args.equiv_mode == 'erl':
-        teacher.set_projector_equiv(student.module.projector_equiv)
-    elif args.equiv_mode == 'stl':
-        if not hasattr(student.module, 'transform_module'):
-            if args.arch == 'vit_small':
-                embed_dim = student.module.backbone.embed_dim
-            elif args.arch == 'resnet50':
-                embed_dim = 2048
-            else:
-                raise ValueError(f"Unknown architecture: {args.arch}")
-            
-            # Create the STL transformation module
-            from builder.stl import STLTransformModule
-            student.module.transform_module = STLTransformModule(
-                repr_dim=embed_dim,
-                args=args
-            )
-            
-            # Store loss weights
-            student.module.inv_weight = args.stl_inv_weight
-            student.module.equi_weight = args.stl_equi_weight
-            student.module.trans_weight = args.stl_trans_weight
-        
-        teacher_without_ddp.transform_module = copy.deepcopy(student.module.transform_module)
-        teacher.module.transform_module = teacher_without_ddp.transform_module
-
-        teacher_without_ddp.inv_weight = student.module.inv_weight
-        teacher_without_ddp.equi_weight = student.module.equi_weight
-        teacher_without_ddp.trans_weight = student.module.trans_weight
-        teacher.module.inv_weight = student.module.inv_weight
-        teacher.module.equi_weight = student.module.equi_weight
-        teacher.module.trans_weight = student.module.trans_weight
 
     # ============ preparing loss ... ============
     dino_loss = DINOLoss(
@@ -325,22 +302,23 @@ def train_dino(args):
             rest_epochs=args.rest_epochs_scheduler,
             ratio=args.equiv_ratio_start,
         )
+        assert args.equiv_ratio_start > 0.0
+        assert args.equiv_ratio_end == 0.0
     else:
         equi_scheduler = utils.base_scheduler(
             args.epochs, len(data_loader),
         )
 
-    assert args.equiv_ratio_start > 0.0
-    assert args.equiv_ratio_end == 0.0
-
     proj_name = f'DINO_{args.equiv_mode}_{args.arch}_{args.lr}_clipgrad_{args.clip_grad}_{socket.gethostname()}_ep{args.epochs}_{args.tag}' if args.equiv_mode != 'erl' else f'DINO_{args.equiv_mode}_{args.arch}' \
         +f'_{args.lr}_{args.equiv_mode}_{args.equiv_scale[0]}_{args.equiv_scale[1]}_{round(args.equiv_aspect_ratio[0],2)}_{args.equiv_lambda}_{args.equiv_layer}_{args.warmup_epochs_scheduler}' \
             +f'_{args.rest_epochs_scheduler}_{args.equiv_ratio_start}_{args.equiv_ratio_end}_clipgrad_{args.clip_grad}_{args.temperature}_{socket.gethostname()}_ep{args.epochs}_{args.tag}'
 
-
     # proj_name = 'ex'
     args.output_dir = os.path.join(args.ckpt_dir, args.equiv_mode, proj_name)
     os.makedirs(args.output_dir, exist_ok=True)
+
+    if args.equiv_mode == 'equimod':
+        student._set_static_graph()
 
     loss_list_equiv = []
     loss_list_inv = []
@@ -431,7 +409,7 @@ def train_one_epoch(student, teacher, teacher_without_ddp, dino_loss, data_loade
         # EMA update for the teacher
         with torch.no_grad():
             m = momentum_schedule[step_all]  # momentum parameter
-            for param_q, param_k in zip(student.module.parameters(), teacher_without_ddp.parameters()):
+            for param_q, param_k in zip(student.parameters(), teacher.parameters()):
                 param_k.data.mul_(m).add_((1 - m) * param_q.detach().data)
 
         # logging
@@ -446,7 +424,6 @@ def train_one_epoch(student, teacher, teacher_without_ddp, dino_loss, data_loade
     metric_logger.synchronize_between_processes()
     print("Averaged stats:", metric_logger)
     return {k: meter.global_avg for k, meter in metric_logger.meters.items()}, _loss_list_inv, _loss_list_equiv
-
 
 
 

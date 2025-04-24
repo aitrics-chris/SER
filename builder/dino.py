@@ -1,12 +1,10 @@
 import torch
-import torch.distributed as dist
-import math
-import sys
-from .utils import concat_all_gather
 import torch.nn as nn
-import torch.nn.functional as F
-from builder.stl import STLTransformModule, load_mlp, build_transforms
-from torchvision.transforms import v2
+import torch.distributed as dist
+
+from builder.stl import STLTransformModule, load_mlp
+from builder.equimod import build_equimod_transforms, normalize_parameters
+from builder.utils import concat_all_gather
 
 
 def train_inv(student, teacher, teacher_without_ddp, images, aug_equi, _mean, _std, epoch, dino_loss, loss_list_inv, loss_list_equiv, inv_samples_num, equiv_samples_num, args):
@@ -65,7 +63,7 @@ def train_erl(student, teacher, teacher_without_ddp, images, aug_equi, _mean, _s
     teacher_without_ddp.forward = teacher_without_ddp.hybrid
     student.module.forward = student.module.hybrid
     with torch.autocast(device_type="cuda"):
-        teacher_cls, teacher_equiv = teacher(images)             
+        teacher_cls, teacher_equiv = teacher(images)
         student_cls, student_equiv = student(images)
 
     ################# Equiv: compute equivariance loss ####ß########################
@@ -158,116 +156,93 @@ def train_stl(student, teacher, teacher_without_ddp, images, aug_equi, _mean, _s
         # Apply color augmentations using aug_equi
         aug_images_0 = aug_equi.aug_inv1(images[0]).sub_(_mean).div_(_std)
         aug_images_1 = aug_equi.aug_inv2(images[1]).sub_(_mean).div_(_std)
-        
+
         # Apply geometric augmentations
         w, h, degrees, flips, num_rot90 = aug_equi.get_params(args.equiv_scale, args.equiv_aspect_ratio, images[0].shape[0])
-        
+
         # Create transformed versions using the same geometric parameters
         trans_images_0 = aug_equi.aug_equiv(
-            aug_images_0, 
-            w*args.stride, h*args.stride, 
-            degrees, flips, num_rot90
+            aug_images_0, w * args.stride, h * args.stride, degrees, flips, num_rot90
         )
         trans_images_1 = aug_equi.aug_equiv(
-            aug_images_1, 
-            w*args.stride, h*args.stride, 
-            degrees, flips, num_rot90
+            aug_images_1, w * args.stride, h * args.stride, degrees, flips, num_rot90
         )
-    
+
     with torch.autocast(device_type="cuda"):
         # Get teacher output on augmented views
         teacher_output = teacher([aug_images_0, aug_images_1])
-        
+
         # Forward pass through student with all views
         stl_outputs = student.module.stl_forward(
-            aug_images_0, aug_images_1,  # Augmented views
-            trans_images_0, trans_images_1  # Transformed views
+            aug_images_0,
+            aug_images_1,  # Augmented views
+            trans_images_0,
+            trans_images_1,  # Transformed views
         )
-        
+
         # Compute invariance loss
-        inv_features = stl_outputs['inv_features']
+        inv_features = stl_outputs["inv_features"]
         student_output = torch.cat([inv_features[0], inv_features[1]])
         loss_inv = dino_loss(student_output, teacher_output, epoch)
-        
+
         # Compute STL-specific losses
         stl_losses = student.module.compute_stl_losses(stl_outputs)
-        loss_equiv = stl_losses['equi']
-        loss_trans = stl_losses['trans']
-        
+        loss_equiv = stl_losses["equi"]
+        loss_trans = stl_losses["trans"]
+
         # Combine losses with weights
-        loss = (loss_inv * args.stl_inv_weight + 
-                loss_equiv * args.stl_equi_weight + 
-                loss_trans * args.stl_trans_weight)
-    
+        loss = (
+            loss_inv * args.stl_inv_weight
+            + loss_equiv * args.stl_equi_weight
+            + loss_trans * args.stl_trans_weight
+        )
+
     # Update loss tracking
     if dist.get_rank() == 0:
         loss_list_inv.append(loss_inv.item())
         loss_list_equiv.append(loss_equiv.item() + loss_trans.item())
-    
+
     return loss, loss_inv, loss_equiv, loss_list_inv, loss_list_equiv
 
 
 def train_equimod(student, teacher, teacher_without_ddp, images, aug_equi, _mean, _std, epoch, dino_loss, loss_list_inv, loss_list_equiv, inv_samples_num, equiv_samples_num, args):
-    total_images = len(images[0]) if isinstance(images, list) and len(images) > 0 else 0
+    student.module.forward = student.module.inv
+    teacher_without_ddp.forward = teacher_without_ddp.inv
 
-    if equiv_samples_num <= 0:
-        inv_samples_num = total_images
-        equiv_samples_num = 0
-    
-    # Process invariance images
+    ################# Inv: 2-augmentation (color) ###############
     with torch.no_grad():
-        aug_images_0 = aug_equi.aug_inv1(images[0]).sub_(_mean).div_(_std)
-        aug_images_1 = aug_equi.aug_inv2(images[1]).sub_(_mean).div_(_std)
-    
-    # Calculate invariance loss
+        images[0] = aug_equi.aug_inv1(images[0]).sub_(_mean).div_(_std)
+        images[1] = aug_equi.aug_inv2(images[1]).sub_(_mean).div_(_std)
+    ################# images[0], images[1] ################
+
     with torch.autocast(device_type="cuda"):
-        teacher_output = teacher([aug_images_0, aug_images_1])
-        student_output = student([aug_images_0, aug_images_1])
-        loss_inv = dino_loss(student_output, teacher_output, epoch)
+        teacher_inv = teacher(images[:2])
+        student_inv = student(images)
+        loss_inv = dino_loss(student_inv, teacher_inv, epoch)
+
+    transforms = build_equimod_transforms(_mean, _std)
     
-    # Initialize equivariance loss
-    loss_equiv = torch.tensor(0.0, device=loss_inv.device)
-    
-    # Process equivariance images if available and enabled
-    if args.equimod_equi_weight > 0 and equiv_samples_num > 0:
-        # Create transformed images for equivariance
-        with torch.no_grad():
-            # Get a subset of images for equivariance
-            equiv_img = images[0][:equiv_samples_num]
-            
-            # Apply augmentations
-            aug_equiv_img = aug_equi.aug_inv1(equiv_img).sub_(_mean).div_(_std)
-            
-            # Generate transformation parameters
-            w, h, degrees, flips, num_rot90 = aug_equi.get_params(
-                args.equiv_scale, args.equiv_aspect_ratio, equiv_samples_num
-            )
-            
-            trans_equiv_img = aug_equi.aug_equiv(
-                aug_equiv_img, w*args.stride, h*args.stride, degrees, flips, num_rot90
-            )
+    with torch.no_grad():
+        aug_images, params = transforms(images[0])
+        params = params.to(aug_images.device)
+        norm_params = normalize_parameters(params)
+
+    with torch.autocast(device_type="cuda"):
+        student.module.forward = student.module.equimod_forward
+
+        ori_features = student(images[0])
+        aug_features = student(aug_images)
         
-        with torch.autocast(device_type="cuda"):
-            y0, features0 = student(aug_equiv_img, return_features=True)
-            
-            with torch.no_grad():
-                yt, features_t = teacher(trans_equiv_img, return_features=True)
-            
-            if features0 and features_t:
-                f0 = F.normalize(features0[0], dim=1)
-                ft = F.normalize(features_t[0], dim=1)
-                
-                loss_equiv = 1.0 - torch.mean(torch.sum(f0 * ft, dim=1))
+        ori_proj_features = student.module.transform_module.projector_equiv(ori_features)
+        aug_proj_features = student.module.transform_module.projector_equiv(aug_features)
+        
+        loss_equiv = student.module.transform_module.compute_loss(ori_proj_features, aug_proj_features, norm_params.expand(ori_proj_features.shape[0], -1))
     
-    # Combine losses
-    loss = args.equimod_inv_weight * loss_inv
-    if args.equimod_equi_weight > 0:
-        loss += args.equimod_equi_weight * loss_equiv
+    loss = args.equimod_inv_weight * loss_inv + args.equimod_equi_weight * loss_equiv
     
-    # Update loss lists for tracking
     if dist.get_rank() == 0:
         loss_list_inv.append(loss_inv.item())
-        loss_list_equiv.append(loss_equiv.item() if isinstance(loss_equiv, torch.Tensor) else 0)
+        loss_list_equiv.append(loss_equiv.item())    
     
     return loss, loss_inv, loss_equiv, loss_list_inv, loss_list_equiv
 
@@ -286,41 +261,42 @@ class MultiCropWrapper(nn.Module):
     concatenate all the output features and run the head forward on these
     concatenated features.
     """
+
     def __init__(self, backbone, args, head):
         super(MultiCropWrapper, self).__init__()
         # disable layers dedicated to ImageNet labels classification
-        if hasattr(backbone, 'fc'):
+        if hasattr(backbone, "fc"):
             backbone.fc = nn.Identity()
-        if hasattr(backbone, 'head'):
+        if hasattr(backbone, "head"):
             backbone.head = nn.Identity()
-            
+
         self.backbone = backbone
         self.head = head
         self.args = args
 
         # Determine embedding dimension based on architecture
-        if args.arch == 'vit_small':
+        if args.arch == "vit_small":
             embed_dim = backbone.embed_dim
-        elif args.arch == 'resnet50':
+        elif args.arch == "resnet50":
             embed_dim = 2048
         else:
             raise ValueError(f"Unknown architecture: {args.arch}")
 
         # Initialize different projectors based on equivariance mode
-        if args.equiv_mode == 'erl':
+        if args.equiv_mode == "erl":
             layers = []
             layers.append(nn.Conv2d(384, 512, kernel_size=1, bias=False))
             layers.append(nn.GELU())
             layers.append(nn.Conv2d(512, 512, kernel_size=1, bias=False))
             self.projector_equiv = nn.Sequential(*layers)
-            
-        elif args.equiv_mode == 'stl':
+
+        elif args.equiv_mode == "stl":
             # Use the load_mlp function from stl_modules
             self.projector_equiv = load_mlp(embed_dim, args.stl_projector)
-            
+
             # Create the STL transformation module
             self.transform_module = STLTransformModule(embed_dim, args)
-            
+
             # Store loss weights
             self.inv_weight = args.stl_inv_weight
             self.equi_weight = args.stl_equi_weight
@@ -333,84 +309,101 @@ class MultiCropWrapper(nn.Module):
             # Current simplified version
             self.trans_backbone = load_mlp(2 * embed_dim, args.stl_trans_backbone)
 
-        elif args.equiv_mode in ['essl', 'equimod', 'augself']:
+        elif args.equiv_mode == "equimod":
+            self.projector_equiv = nn.Sequential(
+                nn.Linear(embed_dim, embed_dim),
+                nn.BatchNorm1d(embed_dim),
+                nn.ReLU(inplace=True),
+                
+                nn.Linear(embed_dim, embed_dim),
+                nn.BatchNorm1d(embed_dim),
+                nn.ReLU(inplace=True),
+                
+                nn.Linear(embed_dim, 256),
+                nn.BatchNorm1d(256)
+            )
+
+        elif args.equiv_mode in ["essl", "augself"]:
             # For other equivariance modes, create a simple projector
             self.projector_equiv = nn.Sequential(
                 nn.Linear(embed_dim, 256),
                 nn.BatchNorm1d(256),
                 nn.ReLU(inplace=True),
-                nn.Linear(256, 128)
+                nn.Linear(256, 128),
             )
 
     def set_projector_equiv(self, projector_equiv):
         """Set the equivariance projector (used to sync teacher with student)"""
         self.projector_equiv = projector_equiv
-        
+
         # If using STL, also sync the transform module's projectors
-        if hasattr(self, 'transform_module'):
+        if hasattr(self, "transform_module"):
             self.transform_module.equi_projector = projector_equiv
-            
+
     def forward(self, x, mask=None, return_features=False):
         """
         Forward pass for standard DINO processing
         """
         if not isinstance(x, list):
             x = [x]
-            
-        idx_crops = torch.cumsum(torch.unique_consecutive(
-            torch.tensor([inp.shape[-1] for inp in x]),
-            return_counts=True,
-        )[1], 0)
-        
+
+        idx_crops = torch.cumsum(
+            torch.unique_consecutive(
+                torch.tensor([inp.shape[-1] for inp in x]),
+                return_counts=True,
+            )[1],
+            0,
+        )
+
         start_idx = 0
         backbone_features = []
-        
+
         for end_idx in idx_crops:
             # Handle different input resolutions
             # Use forward_baseline or forward_inv_ if available
-            input_tensor = torch.cat(x[start_idx: end_idx])
-            
-            if hasattr(self.backbone, 'forward_baseline'):
+            input_tensor = torch.cat(x[start_idx:end_idx])
+
+            if hasattr(self.backbone, "forward_baseline"):
                 _out = self.backbone.forward_baseline(input_tensor)
-            elif hasattr(self.backbone, 'forward_inv_'):
+            elif hasattr(self.backbone, "forward_inv_"):
                 _out = self.backbone.forward_inv_(input_tensor)
             else:
                 # Fallback to direct call
                 _out = self.backbone(input_tensor)
-            
+
             if isinstance(_out, tuple):
                 _out = _out[0]  # Some backbones return (features, attention_maps)
-            
+
             # Store features for equivariance if needed
             if return_features:
                 backbone_features.append(_out)
-            
+
             # Apply head to get final output
             _out = self.head(_out)
-            
+
             if start_idx == 0:
                 output = _out
             else:
                 output = torch.cat((output, _out))
             start_idx = end_idx
-        
+
         if return_features:
             return output, backbone_features
         else:
             return output
-            
+
     def inv(self, x):
         """Forward pass for invariance only"""
         feat_inv = []
         for _x in x:
-            _cls = self.backbone.forward_inv_(_x)            
+            _cls = self.backbone.forward_inv_(_x)
             # accumulate outputs
             feat_inv.append(_cls)
         with torch.autocast(device_type="cuda"):
             feat_inv = self.head(torch.cat(feat_inv))
         return feat_inv
- 
-    def hybrid(self, x, idx_equiv=[1,3], idx_inv=[0,2]):
+
+    def hybrid(self, x, idx_equiv=[1, 3], idx_inv=[0, 2]):
         """Forward pass for hybrid invariance and equivariance"""
         feat_inv = []
         feat_equiv = []
@@ -422,21 +415,21 @@ class MultiCropWrapper(nn.Module):
                 _cls, _equiv = self.backbone.forward_equiv(x[_idx])
                 feat_inv.append(_cls)
                 feat_equiv.append(_equiv)
-                    
+
         with torch.autocast(device_type="cuda"):
             feat_inv = self.head(torch.cat(feat_inv))
             for i in range(len(feat_equiv)):
                 feat_equiv[i] = self.projector_equiv(feat_equiv[i])
         return feat_inv, feat_equiv
-    
+
     def stl_forward(self, x1, x2, t1, t2):
         """
         Forward pass for STL mode
-        
+
         Args:
             x1, x2: Original input images
             t1, t2: Transformed versions of the input images
-        
+
         Returns:
             Dictionary containing all necessary outputs for STL loss computation
         """
@@ -444,7 +437,7 @@ class MultiCropWrapper(nn.Module):
         feat_x2 = self.backbone.forward_baseline(x2)
         feat_t1 = self.backbone.forward_baseline(t1)
         feat_t2 = self.backbone.forward_baseline(t2)
-        
+
         # Handle tuple outputs if needed
         if isinstance(feat_x1, tuple):
             feat_x1 = feat_x1[0]
@@ -454,17 +447,17 @@ class MultiCropWrapper(nn.Module):
             feat_t1 = feat_t1[0]
         if isinstance(feat_t2, tuple):
             feat_t2 = feat_t2[0]
-        
+
         proj_x1 = self.head(feat_x1)
         proj_x2 = self.head(feat_x2)
         proj_t1 = self.head(feat_t1)
         proj_t2 = self.head(feat_t2)
-        
+
         equi_x1 = self.transform_module.project_features(feat_x1)
         equi_x2 = self.transform_module.project_features(feat_x2)
         equi_t1 = self.transform_module.project_features(feat_t1)
         equi_t2 = self.transform_module.project_features(feat_t2)
-        
+
         # Compute transformation representations
         trans_12 = self.trans_backbone(torch.cat([feat_x1, feat_t1], dim=-1))
         trans_21 = self.trans_backbone(torch.cat([feat_x2, feat_t2], dim=-1))
@@ -474,35 +467,66 @@ class MultiCropWrapper(nn.Module):
         pred_t2 = self.transform_module.apply_transform(feat_x2, trans_12)
 
         return {
-            'inv_features': [proj_x1, proj_x2, proj_t1, proj_t2],
-            'equi_features': [equi_x1, equi_x2, equi_t1, equi_t2],
-            'trans_features': [trans_12, trans_21],
-            'pred_features': [pred_t1, pred_t2],
-            'target_features': [equi_t2, equi_t1]
+            "inv_features": [proj_x1, proj_x2, proj_t1, proj_t2],
+            "equi_features": [equi_x1, equi_x2, equi_t1, equi_t2],
+            "trans_features": [trans_12, trans_21],
+            "pred_features": [pred_t1, pred_t2],
+            "target_features": [equi_t2, equi_t1],
         }
-    
+
+    def equimod_forward(self, x):
+        """
+        Forward pass for EquiMod that processes a single image batch
+        and returns the projected features for equivariance learning.
+        
+        Args:
+            x: A batch of images, which might be 4D [B,C,H,W] or 5D [1,B,C,H,W]
+            
+        Returns:
+            Projected features for equivariance loss computation
+        """
+        # Handle 5D input by removing the first dimension if needed
+        if len(x.shape) == 5:
+            # Input is [1, B, C, H, W], reshape to [B, C, H, W]
+            x = x.squeeze(0)
+        
+        # Check input shape and ensure it's 4D (batch, channels, height, width)
+        if len(x.shape) != 4:
+            raise ValueError(f"Expected 4D input after processing (B,C,H,W), got shape {x.shape}")
+        
+        # Use forward_inv_ which is definitely implemented in the backbone
+        features = self.backbone.forward_baseline(x)
+        
+        # Handle tuple outputs if needed
+        if isinstance(features, tuple):
+            features = features[0]
+        return features
+
     def compute_stl_losses(self, outputs):
-        trans_features = outputs['trans_features']
-        pred_features = outputs['pred_features']
-        target_features = outputs['target_features']
-        
-        equi_loss_1 = self.transform_module.info_nce_loss(pred_features[0], target_features[0])
-        equi_loss_2 = self.transform_module.info_nce_loss(pred_features[1], target_features[1])
+        trans_features = outputs["trans_features"]
+        pred_features = outputs["pred_features"]
+        target_features = outputs["target_features"]
+
+        equi_loss_1 = self.transform_module.info_nce_loss(
+            pred_features[0], target_features[0]
+        )
+        equi_loss_2 = self.transform_module.info_nce_loss(
+            pred_features[1], target_features[1]
+        )
         equi_loss = (equi_loss_1 + equi_loss_2) / 2.0
-        
-        trans_loss = self.transform_module.info_nce_loss(trans_features[0], trans_features[1])
-        
-        return {
-            'equi': equi_loss,
-            'trans': trans_loss
-        }
-    
+
+        trans_loss = self.transform_module.info_nce_loss(
+            trans_features[0], trans_features[1]
+        )
+
+        return {"equi": equi_loss, "trans": trans_loss}
+
     def get_intermediate_layers(self, x, n=1):
         """
         Get intermediate layers from the backbone
         Used for equivariance loss computation
         """
-        if hasattr(self.backbone, 'get_intermediate_layers'):
+        if hasattr(self.backbone, "get_intermediate_layers"):
             return self.backbone.get_intermediate_layers(x, n)
         else:
             # Fallback for backbones without this method
