@@ -36,13 +36,13 @@ import builder.moco as ssls
 
 
 parser = argparse.ArgumentParser(description='MoCo ImageNet Pre-Training')
-parser.add_argument('--data', default='/home/chris/storage/imagenet_eval',
+parser.add_argument('--data', default='/home/chris/storage/imagenet',
                     help='path to dataset')
 parser.add_argument('-a', '--arch', metavar='ARCH', default='vit_small',
                     choices=['vit_small', 'resnet50'])
 parser.add_argument('-j', '--workers', default=4, type=int, metavar='N',
                     help='number of data loading workers (default: 32)')
-parser.add_argument('--epochs', default=100, type=int, metavar='N',
+parser.add_argument('--epochs', default=40, type=int, metavar='N',
                     help='number of total epochs to run')
 parser.add_argument('--start-epoch', default=0, type=int, metavar='N',
                     help='manual epoch number (useful on restarts)')
@@ -102,17 +102,17 @@ parser.add_argument('--equiv-aspect-ratio', type=float, nargs='+', default=(3./4
         help="""Scale range of the cropped image before resizing, relatively to the origin image.
         Used for small local view cropping of multi-crop.""")
 # parser.add_argument('--fixed-ratio', type=float, default=0.5, help="""Ratio of minibatch for equivariance loss""")
-parser.add_argument('--equiv-lambda', type=float, default=3.0, help="""lambda for equivariance loss" """)
+parser.add_argument('--equiv-lambda', type=float, default=1.0, help="""lambda for equivariance loss" """)
 # parser.add_argument('--equiv-ratio', type=float, default=0.5, help="""Ratio of minibatch for equivariance loss""")
 parser.add_argument('--equiv-mode', default='essl', choices=['erl', 'essl', 'stl', 'equimod', 'augself', 'inv'], type=str, help='equivariance mode, erl is ours')
-parser.add_argument('--equiv-layer', default=3, type=int, help='layer to impose equiv')
+parser.add_argument('--equiv-layer', default=12, type=int, help='layer to impose equiv')
 
 ## For equiv sampler scheduler
 parser.add_argument('--warmup-epochs-scheduler', default=0, type=int, help='number of warmup epochs for scheduler')
 parser.add_argument('--rest-epochs-scheduler', default=0, type=int, help='number of resting epochs where no equivariance loss is imposed')
 parser.add_argument('--equiv-ratio-start', type=float, default=0.01, help="""Ratio of minibatch for equivariance loss""")
 parser.add_argument('--equiv-ratio-end', type=float, default=0.0, help="""Ratio of minibatch for equivariance loss""")
-parser.add_argument('--tag', default='', type=str, help='append at the end of the foldername')
+parser.add_argument('--tag', default='exxx', type=str, help='append at the end of the foldername')
 
 parser.add_argument('--temperature-equiv', type=float, default=0.5, help="""Temperature for InfoNCE""")
 parser.add_argument('--clip_grad', type=float, default=0.0, help="""Maximal parameter gradient norm if using gradient clipping. 
@@ -180,6 +180,7 @@ def main():
     cudnn.benchmark = True
 
     # ============ preparing data ... ============
+    args.batch_size = int(args.batch_size / args.world_size)
     args.data_mode = args.equiv_mode if args.equiv_mode != 'erl' else 'inv'
     train_dataset = loaders.__dict__[f'get_dataset_{args.data_mode}'](args)
     train_sampler = torch.utils.data.distributed.DistributedSampler(train_dataset)
@@ -199,7 +200,6 @@ def main():
     
     model = torch.nn.SyncBatchNorm.convert_sync_batchnorm(model)
     model.cuda(args.gpu)
-    args.batch_size = int(args.batch_size / args.world_size)
     model = torch.nn.parallel.DistributedDataParallel(model, device_ids=[args.gpu], find_unused_parameters=True if args.equiv_mode == 'erl' else False)
 
 
@@ -236,6 +236,9 @@ def main():
     
     loss_list_equiv = []
     loss_list_inv = []
+    proj_name = f'MoCo_{args.equiv_mode}_{args.arch}_{args.lr}_{args.equiv_scale[0]}_{args.equiv_scale[1]}_{round(args.equiv_aspect_ratio[0],2)}_{args.equiv_lambda}' \
+            +f'_{args.equiv_layer}_{args.warmup_epochs_scheduler}_{args.rest_epochs_scheduler}_{args.equiv_ratio_start}_{args.equiv_ratio_end}_clipgrad_{args.clip_grad}_{args.temperature_equiv}_{socket.gethostname()}_ep{args.epochs}_{args.tag}'
+    print(f'proj_name: {proj_name}')
 
     for epoch in trange(args.start_epoch, args.epochs):
         # if args.distributed:
@@ -266,8 +269,6 @@ def main():
                 }    
     
     # proj_name = 'ex'
-    proj_name = f'MoCo_{args.equiv_mode}_{args.arch}_{args.lr}_{args.equiv_scale[0]}_{args.equiv_scale[1]}_{round(args.equiv_aspect_ratio[0],2)}_{args.equiv_lambda}_{args.ratio_type_equiv}' \
-            +f'_{args.equiv_layer}_{args.warmup_epochs_scheduler}_{args.rest_epochs_scheduler}_{args.equiv_ratio_start}_{args.equiv_ratio_end}_clipgrad_{args.clip_grad}_{args.temperature_equiv}_{socket.gethostname()}_ep{args.epochs}_{args.tag}'
     
     # dir1 = os.path.join(args.output_dir, ssl_type, proj_name)
     # os.makedirs(dir1, exist_ok=True)
@@ -307,7 +308,6 @@ def train(data_loader, model, optimizer, scaler, summary_writer, epoch, args, _m
         len(data_loader),
         [batch_time, data_time, learning_rates, losses, loss_invs, loss_equivs],
         prefix="Epoch: [{}]".format(epoch))
-
     # switch to train mode
     model.train()
 

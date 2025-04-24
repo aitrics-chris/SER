@@ -901,7 +901,7 @@ class Aug_equi(nn.Module):
                                     )
         
         if args.equiv_mode == 'essl':
-            self.inv3 = ImageSequential(            
+            self.inv_rotate = ImageSequential(            
                                         kornia.augmentation.ColorJiggle(0.4, 0.4, 0.2, 0.1, same_on_batch=False, p=0.8),  # not strengthened                                        
                                         kornia.augmentation.RandomGrayscale(same_on_batch=False, p=0.2),
                                         kornia.augmentation.RandomGaussianBlur(kernel_size=(9, 9), sigma=(0.1, 2.0), same_on_batch=False, p=0.1),
@@ -939,7 +939,7 @@ class Aug_equi(nn.Module):
         return self.inv2(x)
     
     def aug_rotate(self, x):
-        return self.inv3(x)
+        return self.inv_rotate(x)
     
     def aug_equiv(self, x, w, h, degrees, flips, num_rot90_pergpu):
         x = torch.cat(list(map(self.rotate, torch.split(x, 1), degrees, flips)), dim=0)

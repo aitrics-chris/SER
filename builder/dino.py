@@ -180,7 +180,8 @@ def train_essl(student, teacher, teacher_without_ddp, images, aug_equi, _mean, _
         student_output = student(images[:2])
         loss_inv = dino_loss(student_output, teacher_output, epoch)
 
-        student.module.forward = student.module.essl
+    student.module.forward = student.module.essl
+    with torch.autocast(device_type="cuda"):
         logit_equiv = student(rotated_images)
         loss_equiv = torch.nn.functional.cross_entropy(logit_equiv, rotated_labels)        
         loss = loss_inv + (loss_equiv * args.equiv_lambda)

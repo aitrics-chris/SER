@@ -34,7 +34,7 @@ torchvision_archs = sorted(name for name in torchvision_models.__dict__
 
 def get_args_parser():
     parser = argparse.ArgumentParser('DINO', add_help=False)
-    parser.add_argument('--data', default='/home/chris/storage/imagenet_eval/', type=str,
+    parser.add_argument('--data', default='/home/chris/storage/imagenet/', type=str,
         help='Please specify path to the ImageNet training data.')
 
     # Model parameters
@@ -288,7 +288,7 @@ def train_dino(args):
     proj_name = f'DINO_{args.equiv_mode}_{args.arch}_{args.lr}_{args.equiv_mode}_{args.equiv_scale[0]}_{args.equiv_scale[1]}_{round(args.equiv_aspect_ratio[0],2)}_{args.equiv_lambda}_{args.equiv_layer}_{args.warmup_epochs_scheduler}' \
             +f'_{args.rest_epochs_scheduler}_{args.equiv_ratio_start}_{args.equiv_ratio_end}_clipgrad_{args.clip_grad}_{args.temperature}_{socket.gethostname()}_ep{args.epochs}_{args.tag}'
 
-
+    print(f'proj_name: {proj_name}')
     # proj_name = 'ex'
     args.output_dir = os.path.join(f'/nfs/thena/chris/icml/ckpt_dino', args.equiv_mode, proj_name)
     os.makedirs(args.output_dir, exist_ok=True)
