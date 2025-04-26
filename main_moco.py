@@ -314,10 +314,10 @@ def train(data_loader, model, optimizer, scaler, summary_writer, epoch, args, _m
     end = time.time()
     iters_per_epoch = len(data_loader)
     moco_m = args.moco_m
-    for i, (images, _) in enumerate(data_loader):
+    for _step, (images, _) in enumerate(data_loader):
         
         ############### To determine data portion for equiv and inv ###############
-        step_all = len(data_loader) * epoch + i
+        step_all = len(data_loader) * epoch + _step
         equiv_samples_num = round(equi_scheduler[step_all] * args.batch_size)
         inv_samples_num = args.batch_size - equiv_samples_num
         ############### Output: 1) inv_samples_num, 2) equiv_samples_num ###############
@@ -326,10 +326,10 @@ def train(data_loader, model, optimizer, scaler, summary_writer, epoch, args, _m
         data_time.update(time.time() - end)
 
         # adjust learning rate and momentum coefficient per iteration
-        lr = adjust_learning_rate(optimizer, epoch + i / iters_per_epoch, args)
+        lr = adjust_learning_rate(optimizer, epoch + _step / iters_per_epoch, args)
         learning_rates.update(lr)
         # if args.moco_m_cos: # always True
-        moco_m = adjust_moco_momentum(epoch + i / iters_per_epoch, args)
+        moco_m = adjust_moco_momentum(epoch + _step / iters_per_epoch, args)
 
         if args.gpu is not None:
             for i in range(len(images)):
@@ -342,7 +342,7 @@ def train(data_loader, model, optimizer, scaler, summary_writer, epoch, args, _m
         loss_equivs.update(loss_equiv.item(), images[0].size(0))
 
         if args.rank == 0:
-            summary_writer.add_scalar("loss", loss.item(), epoch * iters_per_epoch + i)
+            summary_writer.add_scalar("loss", loss.item(), epoch * iters_per_epoch + _step)
 
         # compute gradient and do SGD step
         optimizer.zero_grad()
@@ -358,9 +358,10 @@ def train(data_loader, model, optimizer, scaler, summary_writer, epoch, args, _m
         # measure elapsed time
         batch_time.update(time.time() - end)
         end = time.time()
-
-        if i % args.print_freq == 0:
-            progress.display(i)
+        
+        if _step % args.print_freq == 0:
+            progress.display(_step)
+            # print(f'loss: {loss.item()}, loss_inv: {loss_inv.item()}, loss_equiv: {loss_equiv.item()}')
 
     return _loss_list_inv, _loss_list_equiv
 def save_checkpoint(state, is_best, filename='checkpoint.pth.tar'):
