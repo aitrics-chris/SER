@@ -82,6 +82,21 @@ def train_essl(model, images, inv_samples_num, aug_equi, _mean, _std, moco_m, lo
     return loss, loss_inv, loss_equiv, loss_list_inv, loss_list_equiv
 
 
+def train_stl(model, images, inv_samples_num, aug_equi, _mean, _std, moco_m, loss_list_inv, loss_list_equiv, args):
+    pass
+    # return loss, loss_inv, loss_equiv, loss_list_inv, loss_list_equiv
+
+
+def train_equimod(model, images, inv_samples_num, aug_equi, _mean, _std, moco_m, loss_list_inv, loss_list_equiv, args):
+    pass
+    # return loss, loss_inv, loss_equiv, loss_list_inv, loss_list_equiv
+
+
+def train_augself(model, images, inv_samples_num, aug_equi, _mean, _std, moco_m, loss_list_inv, loss_list_equiv, args):    
+    pass
+    # return loss, loss_inv, loss_equiv, loss_list_inv, loss_list_equiv
+
+
 class MoCo(nn.Module):
     """
     Build a MoCo model with a base encoder, a momentum encoder, and two MLPs

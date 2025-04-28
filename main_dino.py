@@ -28,13 +28,14 @@ from tqdm import trange
 import socket
 import loader as loaders
 import builder.dino as ssls
+
 torchvision_archs = sorted(name for name in torchvision_models.__dict__
     if name.islower() and not name.startswith("__")
     and callable(torchvision_models.__dict__[name]))
 
 def get_args_parser():
     parser = argparse.ArgumentParser('DINO', add_help=False)
-    parser.add_argument('--data', default='/home/chris/storage/imagenet/', type=str,
+    parser.add_argument('--data', default='/home/chris/storage/imagenet_eval/', type=str,
         help='Please specify path to the ImageNet training data.')
 
     # Model parameters
@@ -325,6 +326,7 @@ def train_dino(args):
     if fp16_scaler is not None:
         save_dict['fp16_scaler'] = fp16_scaler.state_dict()
     utils.save_on_master(save_dict, os.path.join(args.output_dir, 'checkpoint.pth'))
+
 
 
 def train_one_epoch(student, teacher, teacher_without_ddp, dino_loss, data_loader,
