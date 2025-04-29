@@ -35,7 +35,7 @@ torchvision_archs = sorted(name for name in torchvision_models.__dict__
 
 def get_args_parser():
     parser = argparse.ArgumentParser('DINO', add_help=False)
-    parser.add_argument('--data', default='/home/chris/storage/imagenet_eval/', type=str,
+    parser.add_argument('--data', default='/home/chris/storage/imagenet/', type=str,
         help='Please specify path to the ImageNet training data.')
 
     # Model parameters
