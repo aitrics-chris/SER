@@ -177,7 +177,7 @@ class VisionTransformer(nn.Module):
         trunc_normal_(self.cls_token, std=.02)
         self.apply(self._init_weights)
         
-        if ssl_type != 'dino':
+        if ssl_type == 'moco':
             for name, m in self.named_modules():
                 if isinstance(m, nn.Linear):
                     if 'qkv' in name:
@@ -195,12 +195,12 @@ class VisionTransformer(nn.Module):
         #     nn.init.uniform_(self.patch_embed.proj.weight, -val, val)
         #     nn.init.zeros_(self.patch_embed.proj.bias)
 
-        if ssl_type == 'moco':
+        # if ssl_type == 'moco':
             self.patch_embed.proj.weight.requires_grad = False
             self.patch_embed.proj.bias.requires_grad = False
-            print(f'MoCo: freeze conv1')
+            print(f'MoCo: freeze conv1 + separate initialization !!')
         else:
-            print(f'not MoCo: NOT freeze conv1')
+            print(f'not MoCo: Neither freeze conv1 nor separate initialization !!')
 
     def _init_weights(self, m):
         if isinstance(m, nn.Linear):
