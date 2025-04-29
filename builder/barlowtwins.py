@@ -2,6 +2,7 @@ import torch
 from .moco import concat_all_gather
 import torch.nn as nn
 import torch.optim as optim
+import math
 
 def train_inv(args, images, inv_samples_num, equiv_samples_num, model, aug_equi, _mean, _std, _loss_list_inv, _loss_list_equiv):
                     
@@ -141,9 +142,7 @@ def train_essl(args, images, inv_samples_num, equiv_samples_num, model, aug_equi
         rotated_labels[3 * nimages:4 * nimages] = 3
     
     with torch.autocast(device_type="cuda"):
-        loss_inv, logit_equiv = model(images_inv_0, images_inv_1, rotated_images)
-
-        loss_equiv = torch.nn.functional.cross_entropy(logit_equiv, rotated_labels)        
+        loss_inv, loss_equiv = model(images_inv_0, images_inv_1, rotated_images, rotated_labels) 
         loss = loss_inv + (loss_equiv * args.equiv_lambda)
 
     if args.rank == 0:
@@ -254,7 +253,7 @@ class BarlowTwins(nn.Module):
         feat_equiv1 = self.projector_equiv(feat_equiv1)
         return loss_inv, feat_equiv0, feat_equiv1
     
-    def forward_essl(self, y1,y2,x):
+    def forward_essl(self, y1,y2,x, rotated_labels):
         """
         Input:
             x: rotated image
@@ -274,12 +273,13 @@ class BarlowTwins(nn.Module):
 
         on_diag = torch.diagonal(c).add_(-1).pow_(2).sum()
         off_diag = off_diagonal(c).pow_(2).sum()
-        loss = on_diag + self.args.lambd * off_diag
+        loss_inv = on_diag + self.args.lambd * off_diag
 
         logit_equiv = self.projector_equiv(self.backbone.forward_baseline(x))
+        loss_equiv = torch.nn.functional.cross_entropy(logit_equiv, rotated_labels)   
 
         # compute features
-        return loss, logit_equiv
+        return loss_inv, loss_equiv
     
 
 class LARS(optim.Optimizer):

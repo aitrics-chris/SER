@@ -34,7 +34,7 @@ from torch.utils.tensorboard import SummaryWriter
 
 parser = argparse.ArgumentParser(description='Barlow Twins Training with equivariance loss')
 parser.add_argument('-a', '--arch', metavar='ARCH', default='vit_small', choices=['vit_small', 'resnet50'])
-parser.add_argument('--data', default='/home/chris/storage/imagenet_eval', help='path to dataset')
+parser.add_argument('--data', default='/home/chris/storage/imagenet', help='path to dataset')
 parser.add_argument('--workers', default=8, type=int, metavar='N',
                     help='number of data loader workers')
 parser.add_argument('--epochs', default=50, type=int, metavar='N',
