@@ -900,7 +900,7 @@ class Aug_equi(nn.Module):
                                         kornia.augmentation.RandomSolarize(thresholds=0.5, additions=0, same_on_batch=False, p=0.2) # different from the original implementation (followed Kornia library default)
                                     )
         
-        if args.equiv_mode == 'essl':
+        if 'essl' in args.equiv_mode:
             self.inv_rotate = ImageSequential(            
                                         kornia.augmentation.ColorJiggle(0.4, 0.4, 0.2, 0.1, same_on_batch=False, p=0.8),  # not strengthened                                        
                                         kornia.augmentation.RandomGrayscale(same_on_batch=False, p=0.2),
