@@ -107,7 +107,7 @@ parser.add_argument('--equiv-aspect-ratio', type=float, nargs='+', default=(3./4
 # parser.add_argument('--fixed-ratio', type=float, default=0.5, help="""Ratio of minibatch for equivariance loss""")
 parser.add_argument('--equiv-lambda', type=float, default=1.0, help="""lambda for equivariance loss" """)
 # parser.add_argument('--equiv-ratio', type=float, default=0.5, help="""Ratio of minibatch for equivariance loss""")
-parser.add_argument('--equiv-mode', default='essl', choices=['erl_inv', 'essl', 'stl', 'equimod', 'augself', 'inv', 'erl_local4', 'inv_essl'], type=str, help='equivariance mode, erl is ours')
+parser.add_argument('--equiv-mode', default='inv_essl', choices=['erl_inv', 'essl', 'stl', 'equimod', 'augself', 'inv', 'erl_local4', 'inv_essl'], type=str, help='equivariance mode, erl is ours')
 parser.add_argument('--equiv-layer', default=12, type=int, help='layer to impose equiv')
 
 ## For equiv sampler scheduler
@@ -125,8 +125,8 @@ def main():
     args = parser.parse_args()
     args.interpolation = InterpolationMode.BILINEAR
 
-    # if args.equiv_mode == 'erl_essl':
-        # args.stride = 16
+    if 'erl' not in args.equiv_mode:
+        assert args.equiv_layer == 12
 
     train_one_step = ssls.__dict__[f'train_{args.equiv_mode}']
 

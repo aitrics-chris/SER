@@ -146,7 +146,7 @@ class VisionTransformer(nn.Module):
         num_patches = self.patch_embed.num_patches
 
         self.cls_token = nn.Parameter(torch.zeros(1, 1, embed_dim))
-        if equiv_mode != 'erl':
+        if 'erl' not in equiv_mode:
             assert equiv_layer == 12
             self.pos_embed = nn.Parameter(torch.zeros(1, num_patches+1, embed_dim))
             self.forward_inv = self.forward_baseline

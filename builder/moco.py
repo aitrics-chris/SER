@@ -68,7 +68,7 @@ def train_inv_essl(model, images, inv_samples_num, aug_equi, _mean, _std, moco_m
         rotated_labels[3 * nimages:4 * nimages] = 3
     
     with torch.autocast(device_type="cuda"):
-        loss_inv = model(images_inv_0, images_inv_1, rotated_images, moco_m)
+        loss_inv = model(images_inv_0, images_inv_1, rotated_images.chunk(4), moco_m)
         loss_equiv = torch.tensor([0.0])
 
     if args.rank == 0:
@@ -267,15 +267,15 @@ class MoCo(nn.Module):
         """
 
         # compute features
-        q1 = self.base_encoder.forward_inv_(x1)
-        q2 = self.base_encoder.forward_inv_(x2)
+        q1 = self.base_encoder.forward_inv(x1)
+        q2 = self.base_encoder.forward_inv(x2)
 
         with torch.no_grad():  # no gradient
             self._update_momentum_encoder(m)  # update the momentum encoder
 
             # compute momentum features as targets
-            k1 = self.momentum_encoder.forward_inv_(x1)
-            k2 = self.momentum_encoder.forward_inv_(x2)
+            k1 = self.momentum_encoder.forward_inv(x1)
+            k2 = self.momentum_encoder.forward_inv(x2)
 
         return q1, q2, k1, k2
 
@@ -363,11 +363,20 @@ class MoCo(nn.Module):
         
         with torch.autocast(device_type="cuda"):
             # both encoder for global view, need to go through head and predictor
-            cls_q[0], cls_q[1], cls_k[0], cls_k[1] = self.forward_inv(images_inv_0, images_inv_1, moco_m) # momentum for k
+            # cls_q[0], cls_q[1], cls_k[0], cls_k[1] = self.forward_inv(images_inv_0, images_inv_1, moco_m) # momentum for k
+            cls_q[0] = self.base_encoder.forward_baseline(images_inv_0)
+            cls_q[1] = self.base_encoder.forward_baseline(images_inv_1)
+
+            with torch.no_grad():  # no gradient
+                self._update_momentum_encoder(moco_m)  # update the momentum encoder
+
+            # compute momentum features as targets
+            cls_k[0] = self.momentum_encoder.forward_inv(images_inv_0)
+            cls_k[1] = self.momentum_encoder.forward_inv(images_inv_1)
 
             # student encoder for local view
             for _equiv_num in range(4):
-                cls_q[_equiv_num+2] = self.base_encoder.forward_inv_(images_localview[_equiv_num])
+                cls_q[_equiv_num+2] = self.base_encoder.forward_baseline(images_localview[_equiv_num])
 
             # head and predictor for CLS from student encoder
             for _aug_num in range(6):
