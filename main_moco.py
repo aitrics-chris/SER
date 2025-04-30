@@ -268,7 +268,7 @@ def main():
                 'student_head': student_head,
                 'teacher': model.module.momentum_encoder.state_dict(),
                 'teacher_head': teacher_head,
-                'projector_equiv': model.module.projector_equiv.state_dict() if args.equiv_mode != 'inv' else None,
+                'projector_equiv': model.module.projector_equiv.state_dict() if args.equiv_mode.split('_')[0] != 'inv' else None,
                 'optimizer' : optimizer.state_dict(),
                 'scaler': scaler.state_dict(),
                 'loss_list_inv': np.array(loss_list_inv),
