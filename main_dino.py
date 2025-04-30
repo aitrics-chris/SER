@@ -9,6 +9,7 @@ from pathlib import Path
 
 import numpy as np
 from PIL import Image
+from torchvision.transforms import InterpolationMode
 import torch
 import torch.nn as nn
 import torch.distributed as dist
@@ -145,9 +146,11 @@ def get_args_parser():
 
 
 def train_dino(args):
-    # 조심해야 할 변수
-    # if_equiv
+    args.interpolation = InterpolationMode.BICUBIC
 
+    if 'erl' not in args.equiv_mode:
+        assert args.equiv_layer == 12
+        
     train_one_step = ssls.__dict__[f'train_{args.equiv_mode}']
 
     utils.init_distributed_mode(args)

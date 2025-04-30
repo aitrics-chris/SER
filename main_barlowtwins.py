@@ -13,6 +13,7 @@ import torch.multiprocessing as mp
 import warnings
 
 from PIL import Image, ImageOps, ImageFilter
+from torchvision.transforms import InterpolationMode
 from torch import nn, optim
 import torch
 import torchvision
@@ -55,6 +56,8 @@ parser.add_argument('--print-freq', default=100, type=int, metavar='N',
                     help='print frequency')
 parser.add_argument('--checkpoint-dir', default='./checkpoint/', type=Path,
                     metavar='DIR', help='path to checkpoint directory')
+parser.add_argument('--crop-min', default=0.08, type=float,
+                    help='minimum scale for random cropping (0.25 for dino, 0.08 for both moco and barlowtwins)')
 
 parser.add_argument("--local-rank", default=0, type=int, help="Please ignore and do not set this argument.")
 parser.add_argument("--dist_url", default="env://", type=str, help="""url used to set up
@@ -87,7 +90,11 @@ parser.add_argument('--clip_grad', type=float, default=0.0, help="""Maximal para
 
 def main():
     args = parser.parse_args()
+    args.interpolation = InterpolationMode.BICUBIC
     train_one_step = ssls.__dict__[f'train_{args.equiv_mode}']
+
+    if 'erl' not in args.equiv_mode:
+        assert args.equiv_layer == 12
 
     # if args.seed is not None:
     torch.manual_seed(args.seed)

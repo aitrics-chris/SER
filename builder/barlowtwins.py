@@ -3,6 +3,7 @@ from .moco import concat_all_gather
 import torch.nn as nn
 import torch.optim as optim
 import math
+from .utils import load_mlp_augself
 
 def train_inv(args, images, inv_samples_num, equiv_samples_num, model, aug_equi, _mean, _std, _loss_list_inv, _loss_list_equiv):
                     
@@ -195,6 +196,9 @@ class BarlowTwins(nn.Module):
                                                     nn.LayerNorm(256),
                                                     nn.Linear(256, 4))  # output layer    
             self.forward = self.forward_essl
+        elif args.equiv_mode == 'augself':
+            self.projector_equiv = load_mlp_augself(n_in=384*2, n_hidden=512, n_out=args.moco_dim, num_layers=3, last_bn=False) # args.moco_dim is 256 by default
+
 
         # projector
         sizes = [args.dim_inv] + list(map(int, args.projector.split('-')))

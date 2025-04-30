@@ -4,6 +4,7 @@ import math
 import sys
 from .utils import concat_all_gather
 import torch.nn as nn
+from .utils import load_mlp_augself
 
 def train_inv(student, teacher, teacher_without_ddp, images, aug_equi, _mean, _std, epoch, dino_loss, loss_list_inv, loss_list_equiv, inv_samples_num, equiv_samples_num, args):
 
@@ -242,6 +243,9 @@ class MultiCropWrapper(nn.Module):
                                                     nn.Linear(384, 256),
                                                     nn.LayerNorm(256),
                                                     nn.Linear(256, 4))  # output layer
+        elif args.equiv_mode == 'augself':
+            self.projector_equiv = load_mlp_augself(n_in=384*2, n_hidden=512, n_out=args.moco_dim, num_layers=3, last_bn=False) # args.moco_dim is 256 by default
+
         
     def set_projector_equiv(self, projector_equiv):
         self.projector_equiv = projector_equiv
