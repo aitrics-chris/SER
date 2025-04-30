@@ -1,6 +1,7 @@
 import torch
 import torch.nn as nn
 import numpy as np
+from .utils import load_mlp_augself
 
 
 def train_inv(model, images, inv_samples_num, aug_equi, _mean, _std, moco_m, loss_list_inv, loss_list_equiv, args):
@@ -19,7 +20,7 @@ def train_inv(model, images, inv_samples_num, aug_equi, _mean, _std, moco_m, los
     return loss, loss_inv, loss_equiv, loss_list_inv, loss_list_equiv
 
 
-def train_erl(model, images, inv_samples_num, aug_equi, _mean, _std, moco_m, loss_list_inv, loss_list_equiv, args):
+def train_erl_inv(model, images, inv_samples_num, aug_equi, _mean, _std, moco_m, loss_list_inv, loss_list_equiv, args):
     model.module.forward = model.module.equiv
     ################# Inv: 2-augmentation (color) ###############
     with torch.no_grad():
@@ -35,6 +36,56 @@ def train_erl(model, images, inv_samples_num, aug_equi, _mean, _std, moco_m, los
     
     with torch.autocast(device_type="cuda"):
         loss, loss_inv, loss_equiv = model(images_inv_0, images_inv_1, images_equiv_0, images_equiv_1, aug_equi, moco_m, args.equiv_lambda)
+    if args.rank == 0:
+        loss_list_inv.append(loss_inv.item())
+        loss_list_equiv.append(loss_equiv.item())
+
+    return loss, loss_inv, loss_equiv, loss_list_inv, loss_list_equiv
+
+def train_inv_essl(model, images, inv_samples_num, aug_equi, _mean, _std, moco_m, loss_list_inv, loss_list_equiv, args):
+    model.module.forward = model.module.inv_essl
+    with torch.no_grad():
+        images_inv_0 = aug_equi.aug_inv1(images[0]).sub_(_mean).div_(_std)
+        images_inv_1 = aug_equi.aug_inv2(images[1]).sub_(_mean).div_(_std)
+        images_rotate = aug_equi.aug_rotate(images[2]).sub_(_mean).div_(_std)
+
+        nimages = images_rotate.shape[0]
+        n_rot_images = 4 * nimages
+
+        # rotate images all 4 ways at once
+        rotated_images = torch.zeros([n_rot_images, images_rotate.shape[1], images_rotate.shape[2], images_rotate.shape[3]]).cuda(args.gpu, non_blocking=True)
+        rotated_labels = torch.zeros([n_rot_images]).long().cuda(args.gpu, non_blocking=True)
+
+        rotated_images[:nimages] = images_rotate
+        # rotate 90
+        rotated_images[nimages:2 * nimages] = images_rotate.flip(3).transpose(2, 3)
+        rotated_labels[nimages:2 * nimages] = 1
+        # rotate 180
+        rotated_images[2 * nimages:3 * nimages] = images_rotate.flip(3).flip(2)
+        rotated_labels[2 * nimages:3 * nimages] = 2
+        # rotate 270
+        rotated_images[3 * nimages:4 * nimages] = images_rotate.transpose(2, 3).flip(3)
+        rotated_labels[3 * nimages:4 * nimages] = 3
+    
+    with torch.autocast(device_type="cuda"):
+        loss_inv = model(images_inv_0, images_inv_1, rotated_images, moco_m)
+        loss_equiv = torch.tensor([0.0])
+
+    if args.rank == 0:
+        loss_list_equiv.append(loss_equiv.item())
+        loss_list_inv.append(loss_inv.item())
+        
+    return loss_inv, loss_inv, loss_equiv, loss_list_inv, loss_list_equiv
+
+def train_erl_local4(model, images, inv_samples_num, aug_equi, _mean, _std, moco_m, loss_list_inv, loss_list_equiv, args):
+    model.module.forward = model.module.erl_local4
+    with torch.no_grad():
+        images_inv_0 = aug_equi.aug_inv1(images[0]).sub_(_mean).div_(_std)
+        images_inv_1 = aug_equi.aug_inv2(images[1]).sub_(_mean).div_(_std)
+        images_small = images[2].sub_(_mean).div_(_std)
+
+    with torch.autocast(device_type="cuda"):
+        loss, loss_inv, loss_equiv = model(images_inv_0, images_inv_1, images_small, aug_equi, moco_m, args.equiv_lambda)
     if args.rank == 0:
         loss_list_inv.append(loss_inv.item())
         loss_list_equiv.append(loss_equiv.item())
@@ -93,8 +144,21 @@ def train_equimod(model, images, inv_samples_num, aug_equi, _mean, _std, moco_m,
 
 
 def train_augself(model, images, inv_samples_num, aug_equi, _mean, _std, moco_m, loss_list_inv, loss_list_equiv, args):    
-    pass
-    # return loss, loss_inv, loss_equiv, loss_list_inv, loss_list_equiv
+    
+    model.module.forward = model.module.inv
+    with torch.no_grad():
+        images_inv_0 = aug_equi.aug_inv1(images[0]).sub_(_mean).div_(_std)
+        images_inv_1 = aug_equi.aug_inv2(images[1]).sub_(_mean).div_(_std)
+    
+    with torch.autocast(device_type="cuda"):
+        loss = model(images_inv_0, images_inv_1, moco_m)
+        loss_inv = loss
+        loss_equiv = torch.tensor([0.0])
+    if args.rank == 0:
+        loss_list_inv.append(loss_inv.item())
+        
+    return loss, loss_inv, loss_equiv, loss_list_inv, loss_list_equiv
+
 
 
 class MoCo(nn.Module):
@@ -119,7 +183,7 @@ class MoCo(nn.Module):
 
         self._build_projector_and_predictor_mlps(dim, mlp_dim) # both heads changes
 
-        if args.equiv_mode == 'erl':
+        if args.equiv_mode.split('_')[0] == 'erl':
             layers = []
             layers.append(nn.Conv2d(384 if args.arch.startswith('vit') else 2048, 512, kernel_size=1, bias=False))
             layers.append(nn.GELU())
@@ -127,7 +191,7 @@ class MoCo(nn.Module):
             layers.append(nn.Conv2d(512, 512, kernel_size=1, bias=False))
             # layers.append(nn.Conv2d(128, 128, kernel_size=1, bias=False))
             self.projector_equiv = nn.Sequential(*layers)        
-        elif args.equiv_mode == 'essl':
+        elif args.equiv_mode.split('_')[0] == 'essl':
             self.projector_equiv = nn.Sequential(nn.Linear(384, 384),
                                                     nn.LayerNorm(384),
                                                     nn.ReLU(inplace=True),  # first layer
@@ -137,6 +201,9 @@ class MoCo(nn.Module):
                                                     nn.Linear(384, 256),
                                                     nn.LayerNorm(256),
                                                     nn.Linear(256, 4))  # output layer    
+        elif args.equiv_mode.split('_')[0] == 'augself':
+            self.projector_equiv = load_mlp_augself(n_in=384*2, n_hidden=512, n_out=args.moco_dim, num_layers=3, last_bn=False) # args.moco_dim is 256 by default
+
 
         for param_b, param_m in zip(self.base_encoder.parameters(), self.momentum_encoder.parameters()):
             param_m.data.copy_(param_b.data)  # initialize
@@ -200,15 +267,15 @@ class MoCo(nn.Module):
         """
 
         # compute features
-        q1 = self.base_encoder.forward_inv(x1)
-        q2 = self.base_encoder.forward_inv(x2)
+        q1 = self.base_encoder.forward_inv_(x1)
+        q2 = self.base_encoder.forward_inv_(x2)
 
         with torch.no_grad():  # no gradient
             self._update_momentum_encoder(m)  # update the momentum encoder
 
             # compute momentum features as targets
-            k1 = self.momentum_encoder.forward_inv(x1)
-            k2 = self.momentum_encoder.forward_inv(x2)
+            k1 = self.momentum_encoder.forward_inv_(x1)
+            k2 = self.momentum_encoder.forward_inv_(x2)
 
         return q1, q2, k1, k2
 
@@ -277,6 +344,152 @@ class MoCo(nn.Module):
         cls_k1 = self.momentum_encoder.head(cls_k1)
         return self.loss_inv(cls_q0, cls_q1, cls_k0, cls_k1)
 
+
+    def inv_essl(self, images_inv_0, images_inv_1, images_localview, moco_m):
+        """
+        Input:
+            x1: first views of images
+            x2: second views of images
+            images_small: list of length 4, rotated images
+            m: moco momentum
+        Output:
+            loss
+        """
+        equiv_samples_num = images_localview[0].shape[0]
+
+        ############### compute semantic inveriance via contrastive loss #############
+        cls_q = [-99, -99, -99, -99, -99, -99]    
+        cls_k = [-99, -99]     
+        
+        with torch.autocast(device_type="cuda"):
+            # both encoder for global view, need to go through head and predictor
+            cls_q[0], cls_q[1], cls_k[0], cls_k[1] = self.forward_inv(images_inv_0, images_inv_1, moco_m) # momentum for k
+
+            # student encoder for local view
+            for _equiv_num in range(4):
+                cls_q[_equiv_num+2] = self.base_encoder.forward_inv_(images_localview[_equiv_num])
+
+            # head and predictor for CLS from student encoder
+            for _aug_num in range(6):
+                cls_q[_aug_num] = self.predictor(self.base_encoder.head(cls_q[_aug_num]))
+
+            # only head for CLS from teacher encoder
+            for _aug_num in range(2):
+                cls_k[_aug_num] = self.momentum_encoder.head(cls_k[_aug_num])
+            
+            loss_inv = torch.tensor(0.0, requires_grad=True, device=cls_q[0].device)
+
+            for _num_q in range(6):
+               for _num_k in range(2):
+                    if _num_q == _num_k:
+                        continue
+                    else:
+                        loss_inv = loss_inv + self.contrastive_loss(cls_q[_num_q], cls_k[_num_k])
+
+        return loss_inv
+
+
+    def erl_local4(self, images_inv_0, images_inv_1, images_small, aug_equi, moco_m, lambda_equiv):
+        """
+        Input:
+            x1: first views of images
+            x2: second views of images
+            m: moco momentum
+        Output:
+            loss
+        """
+        equiv_samples_num = images_small.shape[0]
+        ############### Equiv: geometric aug parameters  #############
+        w, h, degrees, flips, num_rot90_pergpu, images_equiv = [-99, -99, -99, -99], [-99, -99, -99, -99], [-99, -99, -99, -99], [-99, -99, -99, -99], [-99, -99, -99, -99], [-99, -99, -99, -99]
+        for _equiv_num in range(4):
+            w[_equiv_num], h[_equiv_num], degrees[_equiv_num], flips[_equiv_num], num_rot90_pergpu[_equiv_num] = \
+                aug_equi.get_params(equiv_scale=self.args.equiv_scale, ratio=self.args.equiv_aspect_ratio, batch_size=equiv_samples_num, img_size=images_small.shape[-1])
+        # flips1 = torch.logical_not(flips0)
+        # degrees1 = torch.logical_not(degrees0)
+        #################### w, h, degrees, flips ##################
+        ############### Equiv: geometric aug parameters #############
+        for _equiv_num in range(4):
+            images_equiv[_equiv_num]= aug_equi.aug_equiv(images_equiv[_equiv_num], w[_equiv_num]*self.args.stride, h[_equiv_num]*self.args.stride, degrees[_equiv_num], flips[_equiv_num], num_rot90_pergpu[_equiv_num])
+        
+        ############## images_equiv_0, images_equiv_1 #################
+        ############### compute semantic inveriance via contrastive loss #############
+        cls_q = [-99, -99, -99, -99, -99, -99]    
+        cls_k = [-99, -99]     
+        equiv_q = [-99, -99, -99, -99]    
+        equiv_k = [-99, -99, -99, -99]
+        
+        with torch.autocast(device_type="cuda"):
+            # both encoder for global view, need to go through head and predictor
+            cls_q[0], cls_q[1], cls_k[0], cls_k[1] = self.forward_inv(images_inv_0, images_inv_1, moco_m) # momentum for k       
+
+            # student encoder for local view
+            for _equiv_num in range(4):
+                cls_q[_equiv_num+2], equiv_q[_equiv_num] = self.base_encoder.forward_equiv(images_equiv[_equiv_num])
+                equiv_q[_equiv_num] = self.projector_equiv(equiv_q[_equiv_num])            
+
+            # DINO's local-to-global strategy do not forward the local view through teacher, but here, we forward the local view through the early portion of teacher encoder
+            with torch.no_grad():  # no gradient
+                for _equiv_num in range(4):
+                    equiv_k[_equiv_num] = self.momentum_encoder.forward_early(images_equiv[_equiv_num])
+                    equiv_k[_equiv_num] = self.projector_equiv(equiv_k[_equiv_num])
+
+            # head and predictor for CLS from student encoder
+            for _aug_num in range(6):
+                cls_q[_aug_num] = self.predictor(self.base_encoder.head(cls_q[_aug_num]))
+
+            # only head for CLS from teacher encoder
+            for _aug_num in range(2):
+                cls_k[_aug_num] = self.momentum_encoder.head(cls_k[_aug_num])
+            
+            loss_inv = torch.tensor(0.0, requires_grad=True, device=cls_q[0].device)
+
+            for _num_q in range(6):
+               for _num_k in range(2):
+                    if _num_q == _num_k:
+                        continue
+                    else:
+                        loss_inv = loss_inv + self.contrastive_loss(cls_q[_num_q], cls_k[_num_k])
+
+        ################################ loss_inv ###################################
+
+            clsequiv_q0, clsequiv_q1, clsequiv_k0, clsequiv_k1, featequiv_q0, featequiv_q1, featequiv_k0, featequiv_k1 = \
+                    self.forward_equiv(images_equiv[0], images_equiv[1])
+            clsequiv_q2, clsequiv_q3, clsequiv_k2, clsequiv_k3, featequiv_q2, featequiv_q3, featequiv_k2, featequiv_k3 = \
+                    self.forward_equiv(images_equiv[2], images_equiv[3])
+            for _q in [clsinv_q0, clsinv_q1, clsequiv_q0, clsequiv_q1, clsequiv_q2, clsequiv_q3]:
+                _q = self.predictor(self.base_encoder.head(_q))
+            
+            clsinv_q1 = self.predictor(self.base_encoder.head(clsinv_q1))
+            cls_q1 = self.predictor(self.base_encoder.head(torch.cat([clsinv_q1, clsequiv_q1], dim=0)))
+            cls_k0 = self.momentum_encoder.head(torch.cat([clsinv_k0, clsequiv_k0], dim=0))
+            cls_k1 = self.momentum_encoder.head(torch.cat([clsinv_k1, clsequiv_k1], dim=0))
+            
+            loss_inv = self.loss_inv(cls_q0, cls_q1, cls_k0, cls_k1)
+        ################################ loss_inv ###################################
+
+        ################# Equiv: compute equivariance loss ############################
+
+        featequiv_k0 = aug_equi.aug_equiv_feat(featequiv_k0, w1, h1, -num_rot90_pergpu0, num_rot90_pergpu1) # to teacher_equiv[3]
+        featequiv_k1 = aug_equi.aug_equiv_feat(featequiv_k1, w0, h0, -num_rot90_pergpu1, num_rot90_pergpu0) # to teacher_equiv[1], N x 512 x w x h
+
+        featequiv_k0 = torch.transpose(featequiv_k0, 1, 3).reshape(w1*h1*equiv_samples_num, 512)
+        featequiv_k1 = torch.transpose(featequiv_k1, 1, 3).reshape(w0*h0*equiv_samples_num, 512)
+        # print(f'before gather [{args.gpu}]: {teacher_equiv0.shape}, nan: {teacher_equiv0.isnan().sum()}')
+        featequiv_k0, n_list0 = concat_all_gather_different_shape(featequiv_k0, 2)
+        featequiv_k1, n_list1 = concat_all_gather_different_shape(featequiv_k1, 2)
+        # print(f'after gather [{args.gpu}]: {teacher_equiv0.shape}, nan: {teacher_equiv0.isnan().sum()}')
+        featequiv_q0 = torch.transpose(featequiv_q0, 1, 3).reshape(w0*h0*equiv_samples_num, 512)
+        featequiv_q1 = torch.transpose(featequiv_q1, 1, 3).reshape(w1*h1*equiv_samples_num, 512)
+        featequiv_q0, _ = concat_all_gather_different_shape(featequiv_q0, 2)
+        featequiv_q1, _ = concat_all_gather_different_shape(featequiv_q1, 2)
+
+        featequiv_k0 = torch.nn.functional.normalize(featequiv_k0, dim=1)
+        featequiv_k1 = torch.nn.functional.normalize(featequiv_k1, dim=1)
+        featequiv_q0 = torch.nn.functional.normalize(featequiv_q0, dim=1)
+        featequiv_q1 = torch.nn.functional.normalize(featequiv_q1, dim=1)
+
+
+    
     def equiv(self, images_inv_0, images_inv_1, images_equiv_0, images_equiv_1, aug_equi, moco_m, lambda_equiv):
         """
         Input:

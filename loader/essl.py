@@ -3,18 +3,19 @@ import torchvision.transforms as transforms
 import torchvision.datasets as datasets
 import os
 from .inv import MultiCropsTransform
+from PIL import Image
 
 def get_dataset_essl(args):
     # ColorJitter, RandomGrayscale, GaussianBlur, Solarize will be performed using Kornia at GPU. See build.utils.Aug_equi.py
     
     augmentation1 = [
-        transforms.RandomResizedCrop(224),
+        transforms.RandomResizedCrop(224, scale=(args.crop_min, 1.), interpolation=args.interpolation),
         transforms.RandomHorizontalFlip(),
         transforms.ToTensor(),
     ]
 
     augmentation2 = [
-        transforms.RandomResizedCrop(224),
+        transforms.RandomResizedCrop(224, scale=(args.crop_min, 1.), interpolation=args.interpolation),
         transforms.RandomHorizontalFlip(),
         transforms.ToTensor(),
     ]

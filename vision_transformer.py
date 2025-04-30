@@ -270,6 +270,34 @@ class VisionTransformer(nn.Module):
 
         return self.pos_drop(x)
 
+    def forward_early(self, x):
+        # print(f'forward_equiv')
+        with torch.autocast(device_type="cuda"):
+            h = int(x.size(2)/16)
+            w = int(x.size(3)/16)
+
+            x = self.prepare_tokens(x)
+            for i in range(self.equiv_layer):
+                x = self.blocks[i](x)
+            x = self.norm_equiv(x)
+            return x.reshape(-1, h, w, 384).permute(0, 3, 1, 2).contiguous()
+        
+            # for i, blk in enumerate(self.blocks):
+            #     x = blk(x)      
+            #     if self.equiv_layer != 12:
+            #         if i == (self.equiv_layer-1):
+            #             feat_equiv = self.norm_equiv(x)
+
+            #             B, _,_ = x.shape
+            #             # add the [CLS] token to the embed patch tokens
+            #             # cls_tokens = self.cls_token + self.pos_embed[:, 0:1, :]
+            #             x = torch.cat((self.cls_token.expand(B, -1, -1), x), dim=1)
+                        
+            # x = self.norm(x)
+            # if self.equiv_layer == 12:
+            #     feat_equiv = x
+            # return x[:, 0], feat_equiv.reshape(-1, h, w, 384).permute(0, 3, 1, 2).contiguous()
+        
     def forward_equiv(self, x):
         # print(f'forward_equiv')
         with torch.autocast(device_type="cuda"):

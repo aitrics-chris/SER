@@ -886,7 +886,7 @@ def multi_scale(samples, model):
 class Aug_equi(nn.Module):
     def __init__(self, seed, args):
         super(Aug_equi, self).__init__()   
-        
+        self.args = args
         self.inv1 = ImageSequential(            
                                         kornia.augmentation.ColorJiggle(0.4, 0.4, 0.2, 0.1, same_on_batch=False, p=0.8),  # not strengthened                                        
                                         kornia.augmentation.RandomGrayscale(same_on_batch=False, p=0.2),
@@ -918,10 +918,11 @@ class Aug_equi(nn.Module):
         self,
         equiv_scale,
         ratio = [3.0 / 4.0, 4.0 / 3.0],
-        batch_size = 128
+        batch_size = 128,
+        img_size = 224
         ):
         log_ratio = log_ratio = torch.log(torch.tensor((ratio[0], ratio[1])))
-        target_area = 196.0 * torch.empty(1).uniform_(equiv_scale[0], equiv_scale[1], generator=self.seed_generator).item() # (224/16)^2 = 196.0
+        target_area = ((img_size/self.args.stride)**2) * torch.empty(1).uniform_(equiv_scale[0], equiv_scale[1], generator=self.seed_generator).item() # (224/16)^2 = 196.0
         aspect_ratio = torch.exp(torch.empty(1).uniform_(log_ratio[0], log_ratio[1], generator=self.seed_generator)).item()
         w = int(round(math.sqrt(target_area * aspect_ratio)))
         h = int(round(math.sqrt(target_area / aspect_ratio)))
@@ -1144,3 +1145,32 @@ class ProgressMeter(object):
         num_digits = len(str(num_batches // 1))
         fmt = '{:' + str(num_digits) + 'd}'
         return '[' + fmt + '/' + fmt.format(num_batches) + ']'
+
+
+
+def load_mlp_augself(n_in, n_hidden, n_out, num_layers=3, last_bn=True):
+    layers = []
+    for i in range(num_layers-1):
+        layers.append(nn.Linear(n_in, n_hidden, bias=False))
+        layers.append(nn.BatchNorm1d(n_hidden))
+        layers.append(nn.ReLU())
+        n_in = n_hidden
+    layers.append(nn.Linear(n_hidden, n_out, bias=not last_bn))
+    if last_bn:
+        layers.append(nn.BatchNorm1d(n_out))
+    mlp = nn.Sequential(*layers)
+    reset_parameters_augself(mlp)
+    return mlp
+
+def reset_parameters_augself(model):
+    for m in model.modules():
+        if isinstance(m, nn.Conv2d):
+            m.reset_parameters()
+
+        if isinstance(m, nn.Linear):
+            fan_in, _ = nn.init._calculate_fan_in_and_fan_out(m.weight)
+            bound = 1 / math.sqrt(fan_in)
+            nn.init.uniform_(m.weight, -bound, bound)
+            if m.bias is not None:
+                nn.init.uniform_(m.bias, -bound, bound)
+                

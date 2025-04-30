@@ -5,6 +5,7 @@ import shutil
 import time
 import warnings
 from functools import partial
+from PIL import Image
 
 import torch
 import torch.nn as nn
@@ -32,6 +33,7 @@ import copy
 import socket
 import builder.moco as ssls
 from builder.utils import AverageMeter, ProgressMeter
+from torchvision.transforms import InterpolationMode
 # from scp import SCPClient, SCPException
 # import paramiko
 
@@ -105,7 +107,7 @@ parser.add_argument('--equiv-aspect-ratio', type=float, nargs='+', default=(3./4
 # parser.add_argument('--fixed-ratio', type=float, default=0.5, help="""Ratio of minibatch for equivariance loss""")
 parser.add_argument('--equiv-lambda', type=float, default=1.0, help="""lambda for equivariance loss" """)
 # parser.add_argument('--equiv-ratio', type=float, default=0.5, help="""Ratio of minibatch for equivariance loss""")
-parser.add_argument('--equiv-mode', default='essl', choices=['erl', 'essl', 'stl', 'equimod', 'augself', 'inv'], type=str, help='equivariance mode, erl is ours')
+parser.add_argument('--equiv-mode', default='essl', choices=['erl_inv', 'essl', 'stl', 'equimod', 'augself', 'inv', 'erl_local4', 'inv_essl'], type=str, help='equivariance mode, erl is ours')
 parser.add_argument('--equiv-layer', default=12, type=int, help='layer to impose equiv')
 
 ## For equiv sampler scheduler
@@ -119,10 +121,13 @@ parser.add_argument('--temperature-equiv', type=float, default=0.5, help="""Temp
 parser.add_argument('--clip_grad', type=float, default=0.0, help="""Maximal parameter gradient norm if using gradient clipping. 
                     Clipping with norm .3 ~ 1.0 can help optimization for larger ViT architectures. 0 for disabling.""")
 
-
 def main():
     args = parser.parse_args()
-    
+    args.interpolation = InterpolationMode.BILINEAR
+
+    # if args.equiv_mode == 'erl_essl':
+        # args.stride = 16
+
     train_one_step = ssls.__dict__[f'train_{args.equiv_mode}']
 
     if 'vit' in args.arch:
@@ -192,7 +197,7 @@ def main():
     
     model = torch.nn.SyncBatchNorm.convert_sync_batchnorm(model)
     model.cuda(args.gpu)
-    model = torch.nn.parallel.DistributedDataParallel(model, device_ids=[args.gpu], find_unused_parameters=True if args.equiv_mode == 'erl' else False)
+    model = torch.nn.parallel.DistributedDataParallel(model, device_ids=[args.gpu], find_unused_parameters=True if args.equiv_mode == 'erl_inv' else False)
 
 
     # infer learning rate before changing batch size
@@ -211,7 +216,8 @@ def main():
 
     # ============ preparing data ... ============
     args.batch_size = int(args.batch_size / args.world_size)
-    args.data_mode = args.equiv_mode if args.equiv_mode != 'erl' else 'inv'
+    # args.data_mode = args.equiv_mode if args.equiv_mode != 'erl' else 'inv'
+    args.data_mode = args.equiv_mode.split('_')[-1]
     train_dataset = loaders.__dict__[f'get_dataset_{args.data_mode}'](args)
     train_sampler = torch.utils.data.distributed.DistributedSampler(train_dataset)
     data_loader = torch.utils.data.DataLoader(
@@ -222,7 +228,7 @@ def main():
     _std = torch.tensor((0.229, 0.224, 0.225)).view(1,3,1,1).cuda(non_blocking=True)
     aug_equi = utils.Aug_equi(args.gpu, args)
 
-    if args.equiv_mode == 'erl':
+    if args.equiv_mode == 'erl_inv':
         equi_scheduler = utils.constant_scheduler(
             # args.equiv_lambda,
             args.epochs, len(data_loader),

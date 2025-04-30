@@ -8,7 +8,7 @@ import torchvision.transforms.functional as tf
 import os
 from typing import List
 
-def get_dataset_inv(args):
+def get_dataset_local4(args):
     # ColorJitter, RandomGrayscale, GaussianBlur, Solarize will be performed using Kornia at GPU. See build.utils.Aug_equi.py
     
     augmentation1 = [
@@ -35,9 +35,19 @@ def get_dataset_inv(args):
         transforms.ToTensor(),
         # normalize
     ]
+    augmentation3 = [
+        transforms.RandomResizedCrop(96, scale=(0.05,0.14)),
+        transforms.RandomHorizontalFlip(),
+        transforms.ToTensor(),
+    ]
+    augmentation4 = [
+        transforms.RandomResizedCrop(96, scale=(0.05,0.14)),
+        transforms.RandomHorizontalFlip(),
+        transforms.ToTensor(),
+    ]
 
     return datasets.ImageFolder(os.path.join(args.data, 'train'),
-        MultiCropsTransform([transforms.Compose(augmentation1), transforms.Compose(augmentation2)]))
+        MultiCropsTransform([transforms.Compose(augmentation1), transforms.Compose(augmentation2), transforms.Compose(augmentation3), transforms.Compose(augmentation4)]))
     
 
 class MultiCropsTransform:
