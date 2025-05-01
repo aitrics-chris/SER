@@ -79,13 +79,23 @@ def train_inv_essl(model, images, inv_samples_num, aug_equi, _mean, _std, moco_m
 
 def train_erl_local4(model, images, inv_samples_num, aug_equi, _mean, _std, moco_m, loss_list_inv, loss_list_equiv, args):
     model.module.forward = model.module.erl_local4
+    image_global = []
+    image_local = []
+    ################# Inv: 2-augmentation (color) ###############
     with torch.no_grad():
-        images_inv_0 = aug_equi.aug_inv1(images[0]).sub_(_mean).div_(_std)
-        images_inv_1 = aug_equi.aug_inv2(images[1]).sub_(_mean).div_(_std)
-        images_small = images[2].sub_(_mean).div_(_std)
+        image_global.append(aug_equi.aug_inv1(images[0]).sub_(_mean).div_(_std))
+        image_global.append(aug_equi.aug_inv2(images[1]).sub_(_mean).div_(_std))
+    ################# images_inv_0, images_inv_1 ################
 
+    ############## Equiv: 기본 2-augmentation (color) ############
+    for _ in range(2):
+        image_local.append(aug_equi.aug_inv1(images[2]).sub_(_mean).div_(_std))
+    for _ in range(2):
+        image_local.append(aug_equi.aug_inv1(images[3]).sub_(_mean).div_(_std))
+    ################ image_local with length 4 ##############
+    
     with torch.autocast(device_type="cuda"):
-        loss, loss_inv, loss_equiv = model(images_inv_0, images_inv_1, images_small, aug_equi, moco_m, args.equiv_lambda)
+        loss, loss_inv, loss_equiv = model(image_global, image_local, aug_equi, moco_m, args.equiv_lambda)
     if args.rank == 0:
         loss_list_inv.append(loss_inv.item())
         loss_list_equiv.append(loss_equiv.item())
@@ -397,8 +407,7 @@ class MoCo(nn.Module):
 
         return loss_inv
 
-
-    def erl_local4(self, images_inv_0, images_inv_1, images_small, aug_equi, moco_m, lambda_equiv):
+    def erl_local4(self, image_global, image_local, aug_equi, moco_m, lambda_equiv):
         """
         Input:
             x1: first views of images
@@ -407,39 +416,46 @@ class MoCo(nn.Module):
         Output:
             loss
         """
-        equiv_samples_num = images_small.shape[0]
+        equiv_samples_num = image_local[0].shape[0]
+        equiv_feat = 512
         ############### Equiv: geometric aug parameters  #############
-        w, h, degrees, flips, num_rot90_pergpu, images_equiv = [-99, -99, -99, -99], [-99, -99, -99, -99], [-99, -99, -99, -99], [-99, -99, -99, -99], [-99, -99, -99, -99], [-99, -99, -99, -99]
+        w, h, degrees, flips, num_rot90_pergpu, n_list = [-99, -99, -99, -99], [-99, -99, -99, -99], [-99, -99, -99, -99], [-99, -99, -99, -99], [-99, -99, -99, -99], [-99, -99, -99, -99]
         for _equiv_num in range(4):
             w[_equiv_num], h[_equiv_num], degrees[_equiv_num], flips[_equiv_num], num_rot90_pergpu[_equiv_num] = \
-                aug_equi.get_params(equiv_scale=self.args.equiv_scale, ratio=self.args.equiv_aspect_ratio, batch_size=equiv_samples_num, img_size=images_small.shape[-1])
-        # flips1 = torch.logical_not(flips0)
-        # degrees1 = torch.logical_not(degrees0)
+                aug_equi.get_params(equiv_scale=self.args.equiv_scale, ratio=self.args.equiv_aspect_ratio, batch_size=equiv_samples_num, img_size=image_local[_equiv_num].shape[-1])
+        flips[1] = torch.logical_not(flips[0])
+        degrees[1] = torch.logical_not(degrees[0])
+        flips[3] = torch.logical_not(flips[2])
+        degrees[3] = torch.logical_not(degrees[2])
         #################### w, h, degrees, flips ##################
         ############### Equiv: geometric aug parameters #############
         for _equiv_num in range(4):
-            images_equiv[_equiv_num]= aug_equi.aug_equiv(images_equiv[_equiv_num], w[_equiv_num]*self.args.stride, h[_equiv_num]*self.args.stride, degrees[_equiv_num], flips[_equiv_num], num_rot90_pergpu[_equiv_num])
+            image_local[_equiv_num] = aug_equi.aug_equiv(image_local[_equiv_num], w[_equiv_num]*self.args.stride, h[_equiv_num]*self.args.stride, degrees[_equiv_num], flips[_equiv_num], num_rot90_pergpu[_equiv_num])
         
         ############## images_equiv_0, images_equiv_1 #################
         ############### compute semantic inveriance via contrastive loss #############
         cls_q = [-99, -99, -99, -99, -99, -99]    
         cls_k = [-99, -99]     
         equiv_q = [-99, -99, -99, -99]    
-        equiv_k = [-99, -99, -99, -99]
+        equiv_k = [-99, -99, -99, -99] 
+        _map = [-99, -99, -99, -99]
+        _map_num = [-99, -99, -99, -99]
+        _map_denom = [-99, -99, -99, -99]
+        _mask = [-99, -99, -99, -99]
         
         with torch.autocast(device_type="cuda"):
             # both encoder for global view, need to go through head and predictor
-            cls_q[0], cls_q[1], cls_k[0], cls_k[1] = self.forward_inv(images_inv_0, images_inv_1, moco_m) # momentum for k       
+            cls_q[0], cls_q[1], cls_k[0], cls_k[1] = self.forward_inv(image_global[0], image_global[1], moco_m) # momentum for k       
 
             # student encoder for local view
             for _equiv_num in range(4):
-                cls_q[_equiv_num+2], equiv_q[_equiv_num] = self.base_encoder.forward_equiv(images_equiv[_equiv_num])
+                cls_q[_equiv_num+2], equiv_q[_equiv_num] = self.base_encoder.forward_equiv(image_local[_equiv_num])
                 equiv_q[_equiv_num] = self.projector_equiv(equiv_q[_equiv_num])            
 
             # DINO's local-to-global strategy do not forward the local view through teacher, but here, we forward the local view through the early portion of teacher encoder
             with torch.no_grad():  # no gradient
                 for _equiv_num in range(4):
-                    equiv_k[_equiv_num] = self.momentum_encoder.forward_early(images_equiv[_equiv_num])
+                    equiv_k[_equiv_num] = self.momentum_encoder.forward_early(image_local[_equiv_num])
                     equiv_k[_equiv_num] = self.projector_equiv(equiv_k[_equiv_num])
 
             # head and predictor for CLS from student encoder
@@ -459,46 +475,82 @@ class MoCo(nn.Module):
                     else:
                         loss_inv = loss_inv + self.contrastive_loss(cls_q[_num_q], cls_k[_num_k])
 
-        ################################ loss_inv ###################################
+            ################################ loss_inv ###################################
 
-            clsequiv_q0, clsequiv_q1, clsequiv_k0, clsequiv_k1, featequiv_q0, featequiv_q1, featequiv_k0, featequiv_k1 = \
-                    self.forward_equiv(images_equiv[0], images_equiv[1])
-            clsequiv_q2, clsequiv_q3, clsequiv_k2, clsequiv_k3, featequiv_q2, featequiv_q3, featequiv_k2, featequiv_k3 = \
-                    self.forward_equiv(images_equiv[2], images_equiv[3])
-            for _q in [clsinv_q0, clsinv_q1, clsequiv_q0, clsequiv_q1, clsequiv_q2, clsequiv_q3]:
-                _q = self.predictor(self.base_encoder.head(_q))
+            ################# Equiv: compute equivariance loss ############################
+            for _i in range(2):
+                equiv_k[2*_i] = aug_equi.aug_equiv_feat(equiv_k[2*_i], w[(2*_i) + 1], h[(2*_i) + 1], -num_rot90_pergpu[2*_i], num_rot90_pergpu[(2*_i)+1]) # to teacher_equiv[3]
+                equiv_k[(2*_i)+1] = aug_equi.aug_equiv_feat(equiv_k[(2*_i)+1], w[2*_i], h[2*_i], -num_rot90_pergpu[(2*_i)+1], num_rot90_pergpu[2*_i]) # to teacher_equiv[3]
             
-            clsinv_q1 = self.predictor(self.base_encoder.head(clsinv_q1))
-            cls_q1 = self.predictor(self.base_encoder.head(torch.cat([clsinv_q1, clsequiv_q1], dim=0)))
-            cls_k0 = self.momentum_encoder.head(torch.cat([clsinv_k0, clsequiv_k0], dim=0))
-            cls_k1 = self.momentum_encoder.head(torch.cat([clsinv_k1, clsequiv_k1], dim=0))
-            
-            loss_inv = self.loss_inv(cls_q0, cls_q1, cls_k0, cls_k1)
-        ################################ loss_inv ###################################
+            for i in range(4):
+                _h, _w = equiv_k[i].shape[2], equiv_k[i].shape[3]
+                equiv_k[i] = torch.transpose(equiv_k[i], 1, 3).reshape(_w*_h*equiv_samples_num, equiv_feat) # equiv_feat = 512                
+                equiv_k[i], n_list[i] = concat_all_gather_different_shape(equiv_k[i], 2)
 
-        ################# Equiv: compute equivariance loss ############################
+                equiv_q[i] = torch.transpose(equiv_q[i], 1, 3).reshape(w[i]*h[i]*equiv_samples_num, equiv_feat) # equiv_feat = 512
+                equiv_q[i], _ = concat_all_gather_different_shape(equiv_q[i], 2)
 
-        featequiv_k0 = aug_equi.aug_equiv_feat(featequiv_k0, w1, h1, -num_rot90_pergpu0, num_rot90_pergpu1) # to teacher_equiv[3]
-        featequiv_k1 = aug_equi.aug_equiv_feat(featequiv_k1, w0, h0, -num_rot90_pergpu1, num_rot90_pergpu0) # to teacher_equiv[1], N x 512 x w x h
+                equiv_k[i] = torch.nn.functional.normalize(equiv_k[i], dim=1)
+                equiv_q[i] = torch.nn.functional.normalize(equiv_q[i], dim=1)
 
-        featequiv_k0 = torch.transpose(featequiv_k0, 1, 3).reshape(w1*h1*equiv_samples_num, 512)
-        featequiv_k1 = torch.transpose(featequiv_k1, 1, 3).reshape(w0*h0*equiv_samples_num, 512)
-        # print(f'before gather [{args.gpu}]: {teacher_equiv0.shape}, nan: {teacher_equiv0.isnan().sum()}')
-        featequiv_k0, n_list0 = concat_all_gather_different_shape(featequiv_k0, 2)
-        featequiv_k1, n_list1 = concat_all_gather_different_shape(featequiv_k1, 2)
-        # print(f'after gather [{args.gpu}]: {teacher_equiv0.shape}, nan: {teacher_equiv0.isnan().sum()}')
-        featequiv_q0 = torch.transpose(featequiv_q0, 1, 3).reshape(w0*h0*equiv_samples_num, 512)
-        featequiv_q1 = torch.transpose(featequiv_q1, 1, 3).reshape(w1*h1*equiv_samples_num, 512)
-        featequiv_q0, _ = concat_all_gather_different_shape(featequiv_q0, 2)
-        featequiv_q1, _ = concat_all_gather_different_shape(featequiv_q1, 2)
+            _map[0] = torch.mm(equiv_k[0], torch.transpose(equiv_q[1], 0, 1)) / self.args.temperature_equiv
+            _map[1] = torch.mm(equiv_k[1], torch.transpose(equiv_q[0], 0, 1)) / self.args.temperature_equiv
+            _map[2] = torch.mm(equiv_k[2], torch.transpose(equiv_q[3], 0, 1)) / self.args.temperature_equiv
+            _map[3] = torch.mm(equiv_k[3], torch.transpose(equiv_q[2], 0, 1)) / self.args.temperature_equiv
 
-        featequiv_k0 = torch.nn.functional.normalize(featequiv_k0, dim=1)
-        featequiv_k1 = torch.nn.functional.normalize(featequiv_k1, dim=1)
-        featequiv_q0 = torch.nn.functional.normalize(featequiv_q0, dim=1)
-        featequiv_q1 = torch.nn.functional.normalize(featequiv_q1, dim=1)
+            for i in range(4):
+                _map_num[i] = torch.trace(_map[i])
+                _map[i] = torch.exp(_map[i])
+                _mask[i] = torch.ones_like(_map[i], device=_map[i].device)
+
+            # for idx_start, idx_end in zip([0]+n_list0, n_list0):
+            #     _idx_per_sample = int((idx_end-idx_start)/float(equiv_samples_num))
+            #     _mask0 = mask0[idx_start:idx_end, idx_start:idx_end]
+            #     for idx_sample in range(equiv_samples_num):
+            #         _mask0[idx_sample*_idx_per_sample:(idx_sample+1)*_idx_per_sample, idx_sample*_idx_per_sample:(idx_sample+1)*_idx_per_sample] = 0
+            # mask0.fill_diagonal_(1)
+
+            for idx_start, idx_end in zip([0]+n_list[0], n_list[0]):
+                _idx_per_sample = int((idx_end-idx_start)/float(equiv_samples_num))
+                __mask = _mask[0][idx_start:idx_end, idx_start:idx_end]
+                for idx_sample in range(equiv_samples_num):
+                    __mask[idx_sample*_idx_per_sample:(idx_sample+1)*_idx_per_sample, idx_sample*_idx_per_sample:(idx_sample+1)*_idx_per_sample] = 0
+            _mask[0].fill_diagonal_(1)
+
+            for idx_start, idx_end in zip([0]+n_list[1], n_list[1]):
+                _idx_per_sample = int((idx_end-idx_start)/float(equiv_samples_num))
+                __mask = _mask[1][idx_start:idx_end, idx_start:idx_end]
+                for idx_sample in range(equiv_samples_num):
+                    __mask[idx_sample*_idx_per_sample:(idx_sample+1)*_idx_per_sample, idx_sample*_idx_per_sample:(idx_sample+1)*_idx_per_sample] = 0
+            _mask[1].fill_diagonal_(1)
+
+            for idx_start, idx_end in zip([0]+n_list[2], n_list[2]):
+                _idx_per_sample = int((idx_end-idx_start)/float(equiv_samples_num))
+                __mask = _mask[2][idx_start:idx_end, idx_start:idx_end]
+                for idx_sample in range(equiv_samples_num):
+                    __mask[idx_sample*_idx_per_sample:(idx_sample+1)*_idx_per_sample, idx_sample*_idx_per_sample:(idx_sample+1)*_idx_per_sample] = 0
+            _mask[2].fill_diagonal_(1)
+
+            for idx_start, idx_end in zip([0]+n_list[3], n_list[3]):
+                _idx_per_sample = int((idx_end-idx_start)/float(equiv_samples_num))
+                __mask = _mask[3][idx_start:idx_end, idx_start:idx_end]
+                for idx_sample in range(equiv_samples_num):
+                    __mask[idx_sample*_idx_per_sample:(idx_sample+1)*_idx_per_sample, idx_sample*_idx_per_sample:(idx_sample+1)*_idx_per_sample] = 0
+            _mask[3].fill_diagonal_(1)
+
+            loss_equiv = torch.tensor(0.0, requires_grad=True, device=cls_q[0].device)
+
+            for i in range(4):
+                # print(f'_map[i].shape: {_map[i].shape}, _mask[i].shape: {_mask[i].shape}')
+                _map_denom[i] = torch.sum(torch.log(torch.sum(_map[i] * _mask[i], dim=0, dtype=torch.float32)))
+                loss_equiv = loss_equiv + ( (_map_denom[i] - _map_num[i]) / float(_map[i].shape[0]) )
+
+            loss_equiv = loss_equiv / 4.0
+            loss = loss_inv + (loss_equiv * lambda_equiv)
+
+        return loss, loss_inv, loss_equiv
 
 
-    
     def equiv(self, images_inv_0, images_inv_1, images_equiv_0, images_equiv_1, aug_equi, moco_m, lambda_equiv):
         """
         Input:

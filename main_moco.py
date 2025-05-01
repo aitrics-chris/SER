@@ -49,7 +49,7 @@ parser.add_argument('--epochs', default=40, type=int, metavar='N',
                     help='number of total epochs to run')
 parser.add_argument('--start-epoch', default=0, type=int, metavar='N',
                     help='manual epoch number (useful on restarts)')
-parser.add_argument('-b', '--batch-size', default=128, type=int,
+parser.add_argument('-b', '--batch-size', default=64, type=int,
                     metavar='N',
                     help='mini-batch size (default: 4096), this is the total '
                          'batch size of all GPUs on all nodes when '
@@ -107,13 +107,13 @@ parser.add_argument('--equiv-aspect-ratio', type=float, nargs='+', default=(3./4
 # parser.add_argument('--fixed-ratio', type=float, default=0.5, help="""Ratio of minibatch for equivariance loss""")
 parser.add_argument('--equiv-lambda', type=float, default=1.0, help="""lambda for equivariance loss" """)
 # parser.add_argument('--equiv-ratio', type=float, default=0.5, help="""Ratio of minibatch for equivariance loss""")
-parser.add_argument('--equiv-mode', default='inv_essl', choices=['erl_inv', 'essl', 'stl', 'equimod', 'augself', 'inv', 'erl_local4', 'inv_essl'], type=str, help='equivariance mode, erl is ours')
-parser.add_argument('--equiv-layer', default=12, type=int, help='layer to impose equiv')
+parser.add_argument('--equiv-mode', default='erl_local4', choices=['erl_inv', 'essl', 'stl', 'equimod', 'augself', 'inv', 'erl_local4', 'inv_essl'], type=str, help='equivariance mode, erl is ours')
+parser.add_argument('--equiv-layer', default=3, type=int, help='layer to impose equiv')
 
 ## For equiv sampler scheduler
 parser.add_argument('--warmup-epochs-scheduler', default=0, type=int, help='number of warmup epochs for scheduler')
 parser.add_argument('--rest-epochs-scheduler', default=0, type=int, help='number of resting epochs where no equivariance loss is imposed')
-parser.add_argument('--equiv-ratio-start', type=float, default=0.01, help="""Ratio of minibatch for equivariance loss""")
+parser.add_argument('--equiv-ratio-start', type=float, default=0.02, help="""Ratio of minibatch for equivariance loss""")
 parser.add_argument('--equiv-ratio-end', type=float, default=0.0, help="""Ratio of minibatch for equivariance loss""")
 parser.add_argument('--tag', default='exxx', type=str, help='append at the end of the foldername')
 
@@ -197,7 +197,7 @@ def main():
     
     model = torch.nn.SyncBatchNorm.convert_sync_batchnorm(model)
     model.cuda(args.gpu)
-    model = torch.nn.parallel.DistributedDataParallel(model, device_ids=[args.gpu], find_unused_parameters=True if args.equiv_mode == 'erl_inv' else False)
+    model = torch.nn.parallel.DistributedDataParallel(model, device_ids=[args.gpu], find_unused_parameters=True if 'erl' in args.equiv_mode else False)
 
 
     # infer learning rate before changing batch size
