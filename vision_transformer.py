@@ -425,7 +425,7 @@ class VisionTransformer(nn.Module):
 
 def vit_small(args, ssl_type, drop_path_rate, **kwargs):
     assert (args.equiv_layer >= 1) and (args.equiv_layer <= 12)
-    if args.equiv_mode == 'inv':
+    if 'erl' not in args.equiv_mode:
         assert args.equiv_layer == 12
     model = VisionTransformer(
         patch_size=16, embed_dim=384, depth=12, num_heads=6, mlp_ratio=4, drop_path_rate=drop_path_rate,

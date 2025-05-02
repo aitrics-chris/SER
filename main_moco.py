@@ -39,7 +39,7 @@ from torchvision.transforms import InterpolationMode
 
 
 parser = argparse.ArgumentParser(description='MoCo ImageNet Pre-Training')
-parser.add_argument('--data', default='/home/chris/storage/imagenet',
+parser.add_argument('--data', default='/home/chris/storage/imagenet_eval',
                     help='path to dataset')
 parser.add_argument('-a', '--arch', metavar='ARCH', default='vit_small',
                     choices=['vit_small', 'resnet50'])
@@ -49,7 +49,7 @@ parser.add_argument('--epochs', default=40, type=int, metavar='N',
                     help='number of total epochs to run')
 parser.add_argument('--start-epoch', default=0, type=int, metavar='N',
                     help='manual epoch number (useful on restarts)')
-parser.add_argument('-b', '--batch-size', default=64, type=int,
+parser.add_argument('-b', '--batch-size', default=32, type=int,
                     metavar='N',
                     help='mini-batch size (default: 4096), this is the total '
                          'batch size of all GPUs on all nodes when '
@@ -107,8 +107,8 @@ parser.add_argument('--equiv-aspect-ratio', type=float, nargs='+', default=(3./4
 # parser.add_argument('--fixed-ratio', type=float, default=0.5, help="""Ratio of minibatch for equivariance loss""")
 parser.add_argument('--equiv-lambda', type=float, default=1.0, help="""lambda for equivariance loss" """)
 # parser.add_argument('--equiv-ratio', type=float, default=0.5, help="""Ratio of minibatch for equivariance loss""")
-parser.add_argument('--equiv-mode', default='erl_local4', choices=['erl_inv', 'essl', 'stl', 'equimod', 'augself', 'inv', 'erl_local4', 'inv_essl'], type=str, help='equivariance mode, erl is ours')
-parser.add_argument('--equiv-layer', default=3, type=int, help='layer to impose equiv')
+parser.add_argument('--equiv-mode', default='augself', choices=['erl_inv', 'essl', 'stl', 'equimod', 'augself', 'inv', 'erl_local4', 'inv_essl'], type=str, help='equivariance mode, erl is ours')
+parser.add_argument('--equiv-layer', default=12, type=int, help='layer to impose equiv')
 
 ## For equiv sampler scheduler
 parser.add_argument('--warmup-epochs-scheduler', default=0, type=int, help='number of warmup epochs for scheduler')
@@ -226,7 +226,10 @@ def main():
 
     _mean = torch.tensor((0.485, 0.456, 0.406)).view(1,3,1,1).cuda(non_blocking=True)
     _std = torch.tensor((0.229, 0.224, 0.225)).view(1,3,1,1).cuda(non_blocking=True)
-    aug_equi = utils.Aug_equi(args.gpu, args)
+    if 'augself' in args.equiv_mode:
+        aug_equi = None
+    else:
+        aug_equi = utils.Aug_equi(args.gpu, args)
 
     if args.equiv_mode == 'erl_inv':
         equi_scheduler = utils.constant_scheduler(
@@ -338,15 +341,22 @@ def train(data_loader, model, optimizer, scaler, summary_writer, epoch, args, _m
         # if args.moco_m_cos: # always True
         moco_m = adjust_moco_momentum(epoch + _step / iters_per_epoch, args)
 
-        if args.gpu is not None:
+        if 'augself' not in args.equiv_mode:
+            _batch_size = images[0].size(0)
             for i in range(len(images)):
                 images[i] = images[i].cuda(args.gpu, non_blocking=True)
+        else:
+            _batch_size = images[0][0].size(0)
+            args.t1, args.t2 = utils.load_equiv_aug_augself(args)
+            for i in range(len(images)):
+                for j in range(len(images[i])):
+                    images[i][j] = images[i][j].cuda(args.gpu, non_blocking=True)
 
         # return overall loss
         loss, loss_inv, loss_equiv, _loss_list_inv, _loss_list_equiv = train_one_step(model, images, inv_samples_num, aug_equi, _mean, _std, moco_m, _loss_list_inv, _loss_list_equiv, args)
-        losses.update(loss.item(), images[0].size(0))
-        loss_invs.update(loss_inv.item(), images[0].size(0))
-        loss_equivs.update(loss_equiv.item(), images[0].size(0))
+        losses.update(loss.item(), _batch_size)
+        loss_invs.update(loss_inv.item(), _batch_size)
+        loss_equivs.update(loss_equiv.item(), _batch_size)
 
         if args.rank == 0:
             summary_writer.add_scalar("loss", loss.item(), epoch * iters_per_epoch + _step)

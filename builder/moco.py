@@ -1,7 +1,8 @@
 import torch
 import torch.nn as nn
 import numpy as np
-from .utils import load_mlp_augself
+# augself
+from .utils import load_ss_predictor, SSObjective, prepare_training_batch_augself
 
 
 def train_inv(model, images, inv_samples_num, aug_equi, _mean, _std, moco_m, loss_list_inv, loss_list_equiv, args):
@@ -153,18 +154,17 @@ def train_equimod(model, images, inv_samples_num, aug_equi, _mean, _std, moco_m,
     # return loss, loss_inv, loss_equiv, loss_list_inv, loss_list_equiv
 
 
-def train_augself(model, images, inv_samples_num, aug_equi, _mean, _std, moco_m, loss_list_inv, loss_list_equiv, args):    
-    
-    model.module.forward = model.module.inv
+def train_augself(model, images, inv_samples_num, aug_equi, _mean, _std, moco_m, loss_list_inv, loss_list_equiv, args):
+    model.module.forward = model.module.augself
+    x1, x2, d1, d2 = prepare_training_batch_augself(images, args.t1, args.t2, images[0][0].device)
     with torch.no_grad():
-        images_inv_0 = aug_equi.aug_inv1(images[0]).sub_(_mean).div_(_std)
-        images_inv_1 = aug_equi.aug_inv2(images[1]).sub_(_mean).div_(_std)
+        x1 =x1.sub_(_mean).div_(_std)
+        x2 = x2.sub_(_mean).div_(_std)
     
     with torch.autocast(device_type="cuda"):
-        loss = model(images_inv_0, images_inv_1, moco_m)
-        loss_inv = loss
-        loss_equiv = torch.tensor([0.0])
+        loss, loss_inv, loss_equiv = model(x1, x2, moco_m, d1, d2)
     if args.rank == 0:
+        loss_list_equiv.append(loss_equiv.item())
         loss_list_inv.append(loss_inv.item())
         
     return loss, loss_inv, loss_equiv, loss_list_inv, loss_list_equiv
@@ -212,7 +212,16 @@ class MoCo(nn.Module):
                                                     nn.LayerNorm(256),
                                                     nn.Linear(256, 4))  # output layer    
         elif args.equiv_mode.split('_')[0] == 'augself':
-            self.projector_equiv = load_mlp_augself(n_in=384*2, n_hidden=512, n_out=args.moco_dim, num_layers=3, last_bn=False) # args.moco_dim is 256 by default
+
+            # Hyperparameter from ImageNET-100 default, https://github.com/hankook/AugSelf/tree/main
+            self.ss_objective = SSObjective(
+                                                crop  = 0.5,
+                                                color = 0.5,
+                                                flip  = -1.0,
+                                                blur  = -1.0,
+                                                only  = False,
+                                            )
+            self.projector_equiv = load_ss_predictor(n_in=384, ss_objective=self.ss_objective)
 
 
         for param_b, param_m in zip(self.base_encoder.parameters(), self.momentum_encoder.parameters()):
@@ -669,6 +678,20 @@ class MoCo(nn.Module):
 
         return loss, loss_inv, loss_equiv
         # return loss_inv, loss_inv, loss_equiv, loss_equiv_max
+
+    def augself(self, images_inv_0, images_inv_1, moco_m, d1, d2):        
+        cls_q0, cls_q1, cls_k0, cls_k1 = self.forward_inv(images_inv_0, images_inv_1, moco_m)
+        cls_q0_inv = self.predictor(self.base_encoder.head(cls_q0))
+        cls_q1_inv = self.predictor(self.base_encoder.head(cls_q1))
+        cls_k0_inv = self.momentum_encoder.head(cls_k0)
+        cls_k1_inv = self.momentum_encoder.head(cls_k1)
+        loss_inv = self.loss_inv(cls_q0_inv, cls_q1_inv, cls_k0_inv, cls_k1_inv)
+
+        loss_equiv = self.ss_objective(self.projector_equiv, cls_q0, cls_q1, d1, d2)
+        loss = loss_inv + loss_equiv['total']
+        return loss, loss_inv, loss_equiv['total']
+    
+    
 
 class MoCo_ResNet(MoCo):
     def _build_projector_and_predictor_mlps(self, dim, mlp_dim):

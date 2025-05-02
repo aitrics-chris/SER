@@ -31,10 +31,17 @@ import torch
 from torch import nn
 import torch.distributed as dist
 from PIL import ImageFilter, ImageOps
-from kornia.augmentation import ColorJitter, RandomGrayscale, RandomGaussianBlur
-from kornia.augmentation.container import ImageSequential
+# from kornia.augmentation import ColorJitter, RandomGrayscale, RandomGaussianBlur
+# from kornia.augmentation.container import ImageSequential
 import kornia
 from torchvision import datasets, transforms
+import torch.nn.functional as F
+import kornia.augmentation as K
+from kornia.enhance import adjust_saturation, adjust_hue
+
+from typing import Dict, Any, Tuple, Optional
+
+from torch import Tensor
 
 class GaussianBlur(object):
     """
@@ -886,6 +893,9 @@ def multi_scale(samples, model):
 class Aug_equi(nn.Module):
     def __init__(self, seed, args):
         super(Aug_equi, self).__init__()   
+
+        from kornia.augmentation import ColorJitter, RandomGrayscale, RandomGaussianBlur
+        from kornia.augmentation.container import ImageSequential
         self.args = args
         self.inv1 = ImageSequential(            
                                         kornia.augmentation.ColorJiggle(0.4, 0.4, 0.2, 0.1, same_on_batch=False, p=0.8),  # not strengthened                                        
@@ -1174,3 +1184,327 @@ def reset_parameters_augself(model):
             if m.bias is not None:
                 nn.init.uniform_(m.bias, -bound, bound)
                 
+
+class SSObjective:
+    def __init__(self, crop=-1, color=-1, flip=-1, blur=-1, rot=-1, sol=-1, only=False):
+        self.only = only
+        self.params = [
+            ('crop',  crop,  4, 'regression'),
+            ('color', color, 4, 'regression'),
+            ('flip',  flip,  1, 'binary_classification'),
+            ('blur',  blur,  1, 'regression'),
+            ('rot',    rot,  4, 'classification'),
+            ('sol',    sol,  1, 'regression'),
+        ]
+# loss_equiv = self.ss_objective(self.projector_equiv, cls_q0, cls_q1, d1, d2)
+    def __call__(self, ss_predictor, z1, z2, d1, d2, symmetric=True):
+        if symmetric:
+            z = torch.cat([torch.cat([z1, z2], 1),
+                           torch.cat([z2, z1], 1)], 0)
+            d = { k: torch.cat([d1[k], d2[k]], 0) for k in d1.keys() }
+        else:
+            z = torch.cat([z1, z2], 1)
+            d = d1
+
+        losses = { 'total': 0 }
+        for name, weight, n_out, loss_type in self.params:
+            if weight <= 0:
+                continue
+
+            p = ss_predictor[name](z)
+            if loss_type == 'regression':
+                losses[name] = F.mse_loss(torch.tanh(p), d[name])
+            elif loss_type == 'binary_classification':
+                losses[name] = F.binary_cross_entropy_with_logits(p, d[name])
+            elif loss_type == 'classification':
+                losses[name] = F.cross_entropy(p, d[name])
+            losses['total'] += losses[name] * weight
+
+        return losses
+    
+
+def prepare_training_batch_augself(batch, t1, t2, device):
+    ((x1, w1), (x2, w2)) = batch
+    with torch.no_grad():
+        x1 = t1(x1).detach()
+        x2 = t2(x2).detach()
+        diff1 = { k: v.to(device) for k, v in extract_diff(t1, t2, w1, w2).items() }
+        diff2 = { k: v.to(device) for k, v in extract_diff(t2, t1, w2, w1).items() }
+
+    return x1, x2, diff1, diff2
+
+def extract_diff(transforms1, transforms2, crop1, crop2):
+    diff = {}
+    for t1, t2 in zip(transforms1, transforms2):
+        if isinstance(t1, K.RandomHorizontalFlip):
+            f1 = t1._params['batch_prob']
+            f2 = t2._params['batch_prob']
+            break
+
+    center1 = crop1[:, :2]+crop1[:, 2:]/2
+    center2 = crop2[:, :2]+crop2[:, 2:]/2
+    center1[f1, 1] = 1-center1[f1, 1]
+    center2[f1, 1] = 1-center2[f1, 1]
+    diff['crop'] = torch.cat([center1-center2, crop1[:, 2:]-crop2[:, 2:]], 1)
+    diff['flip'] = (f1==f2).float().unsqueeze(-1)
+    for t1, t2 in zip(transforms1, transforms2):
+        if isinstance(t1, K.RandomHorizontalFlip):
+            pass
+
+        elif isinstance(t1, K.RandomGrayscale):
+            pass
+
+        elif isinstance(t1, GaussianBlur_augself):
+            w1 = _extract_w(t1)
+            w2 = _extract_w(t2)
+            diff['blur'] = w1-w2
+
+        elif isinstance(t1, K.Normalize):
+            pass
+
+        elif isinstance(t1, K.ColorJitter):
+            w1 = _extract_w(t1)
+            w2 = _extract_w(t2)
+            diff['color'] = w1-w2
+
+        elif isinstance(t1, (nn.Identity, nn.Sequential)):
+            pass
+
+        elif isinstance(t1, RandomRotation_augself):
+            w1 = _extract_w(t1)
+            w2 = _extract_w(t2)
+            diff['rot'] = (w1-w2+4) % 4
+
+        elif isinstance(t1, K.RandomSolarize):
+            w1 = _extract_w(t1)
+            w2 = _extract_w(t2)
+            diff['sol'] = w1-w2
+
+        else:
+            raise Exception(f'Unknown transform: {str(t1.__class__)}')
+
+    return diff
+
+
+def _extract_w(t):
+    if isinstance(t, GaussianBlur_augself):
+        m = t._params['batch_prob']
+        w = torch.zeros(m.shape[0], 1)
+        w[m] = t._params['sigma'].unsqueeze(-1)
+        return w
+
+    elif isinstance(t, ColorJitter_augself):
+        to_apply = t._params['batch_prob']
+        w = torch.zeros(to_apply.shape[0], 4)
+        w[to_apply, 0] = (t._params['brightness_factor'] - 1) / (t.brightness[1]-t.brightness[0])
+        w[to_apply, 1] = (t._params['contrast_factor'] - 1) / (t.contrast[1]-t.contrast[0])
+        w[to_apply, 2] = (t._params['saturation_factor'] - 1) / (t.saturation[1]-t.saturation[0])
+        w[to_apply, 3] = t._params['hue_factor'] / (t.hue[1]-t.hue[0])
+        return w
+
+    elif isinstance(t, RandomRotation_augself):
+        to_apply = t._params['batch_prob']
+        w = torch.zeros(to_apply.shape[0], dtype=torch.long)
+        w[to_apply] = t._params['degrees']
+        return w
+
+    elif isinstance(t, K.RandomSolarize):
+        to_apply = t._params['batch_prob']
+        w = torch.ones(to_apply.shape[0])
+        w[to_apply] = t._params['thresholds_factor']
+        return w
+    
+
+class RandomRotation_augself(K.AugmentationBase2D):
+    # def __init__(self, same_on_batch=False, p=0.5):
+    #     super().__init__(p=p, same_on_batch=same_on_batch, p_batch=1.0, keepdim=False)
+
+    # def generate_parameters(self, batch_shape):
+    #     return {"degrees": torch.randint(0, 4, (batch_shape[0],))}
+
+    # def apply_transform(
+    #     self,
+    #     input: Tensor,
+    #     params: Dict[str, Tensor],
+    #     flags: Dict[str, Any],
+    #     transform: Optional[Tensor] = None
+    # ) -> Tensor:
+    #     degrees = params['degrees']
+    #     # apply torch.rot90 per-sample
+    #     return torch.stack(
+    #         [torch.rot90(x, int(k), (1, 2)) for x, k in zip(input, degrees.tolist())],
+    #         dim=0
+    #     )
+
+    def __init__(self, return_transform=False, same_on_batch=False, p=0.5):
+        super().__init__(
+            p=p, return_transform=return_transform, same_on_batch=same_on_batch, p_batch=1.)
+
+    def __repr__(self):
+        return self.__class__.__name__ + f"({super().__repr__()})"
+
+    def generate_parameters(self, batch_shape):
+        degrees = torch.randint(0, 4, (batch_shape[0], ))
+        return dict(degrees=degrees)
+
+    def apply_transform(self, input, params):
+        degrees = params['degrees']
+        input = torch.stack([torch.rot90(x, k, (1, 2)) for x, k in zip(input, degrees.tolist())], 0)
+        return input
+    
+
+def load_ss_predictor(n_in, ss_objective, n_hidden=512):
+    ss_predictor = nn.ModuleDict()
+    for name, weight, n_out, _ in ss_objective.params:
+        if weight > 0:
+            ss_predictor[name] = load_mlp_augself(n_in*2, n_hidden, n_out, num_layers=3, last_bn=False)
+
+    return ss_predictor
+
+def load_equiv_aug_augself(args):
+    t1 = nn.Sequential(K.RandomHorizontalFlip(),
+                           ColorJitter_augself(0.4, 0.4, 0.4, 0.1, p=0.8),
+                           K.RandomGrayscale(p=0.2),
+                           GaussianBlur_augself(23, (0.1, 2.0)))
+    t2 = nn.Sequential(K.RandomHorizontalFlip(),
+                        ColorJitter_augself(0.4, 0.4, 0.4, 0.1, p=0.8),
+                        K.RandomGrayscale(p=0.2),
+                        GaussianBlur_augself(23, (0.1, 2.0)))
+    
+    return t1, t2
+
+class ColorJitter_augself(K.ColorJitter):
+    # def apply_transform(
+    #     self,
+    #     x: Tensor,
+    #     params: Dict[str, Tensor],
+    #     flags: Dict[str, Any],
+    #     transform: Optional[Tensor] = None
+    # ) -> Tensor:
+    def apply_transform(self, x, params):
+        
+        # build your list of ops as before, but refer to params[...] for each
+        ops = [
+            lambda img: apply_adjust_brightness(img, params),
+            lambda img: apply_adjust_contrast(img, params),
+            lambda img: adjust_saturation(img, params['saturation_factor']),
+            lambda img: adjust_hue(img, params['hue_factor']),
+        ]
+        out = x
+        for idx in params['order'].tolist():
+            out = ops[idx](out)
+        return out
+
+
+class GaussianBlur_augself(K.AugmentationBase2D):
+    def __init__(self, kernel_size, sigma, border_type='reflect',
+                 return_transform=False, same_on_batch=False, p=0.5):
+        super().__init__(
+            p=p, return_transform=return_transform, same_on_batch=same_on_batch, p_batch=1.)
+        assert kernel_size % 2 == 1
+        self.kernel_size = kernel_size
+        self.sigma = sigma
+        self.border_type = border_type
+
+    def __repr__(self):
+        return self.__class__.__name__ + f"({super().__repr__()})"
+
+    def generate_parameters(self, batch_shape):
+        return dict(sigma=torch.zeros(batch_shape[0]).uniform_(self.sigma[0], self.sigma[1]))
+
+    def apply_transform(self, input, params):
+        sigma = params['sigma'].to(input.device)
+        k_half = self.kernel_size // 2
+        x = torch.linspace(-k_half, k_half, steps=self.kernel_size, dtype=input.dtype, device=input.device)
+        pdf = torch.exp(-0.5*(x[None, :] / sigma[:, None]).pow(2))
+        kernel1d = pdf / pdf.sum(1, keepdim=True)
+        kernel2d = torch.bmm(kernel1d[:, :, None], kernel1d[:, None, :])
+        input = F.pad(input, (k_half, k_half, k_half, k_half), mode=self.border_type)
+        input = F.conv2d(input.transpose(0, 1), kernel2d[:, None], groups=input.shape[0]).transpose(0, 1)
+        return input
+    # def __init__(
+    #     self,
+    #     kernel_size: int,
+    #     sigma: Tuple[float, float],
+    #     border_type: str = 'reflect',
+    #     p: float = 0.5,
+    #     same_on_batch: bool = False,
+    #     p_batch: float = 1.0,
+    #     keepdim: bool = False,
+    # ) -> None:
+    #     """
+    #     Args:
+    #       kernel_size: must be odd
+    #       sigma: (min, max) std-dev for sampling per image
+    #       border_type: any mode supported by F.pad (e.g. 'reflect', 'constant', ...)
+    #       p: probability to apply per sample
+    #       same_on_batch: apply same sigma to all in batch
+    #       p_batch: probability to apply to the batch as a whole
+    #       keepdim: if True, return (out, transform); else just out
+    #     """
+    #     super().__init__(
+    #         p=p,
+    #         p_batch=p_batch,
+    #         same_on_batch=same_on_batch,
+    #         keepdim=keepdim
+    #     )
+    #     assert kernel_size % 2 == 1, "kernel_size must be odd"
+    #     self.kernel_size = kernel_size
+    #     self.sigma = sigma
+    #     # store in flags so apply_transform can read it:
+    #     self.flags: Dict[str, Any] = {"border_type": border_type}
+
+    # def __repr__(self) -> str:
+    #     return (f"{self.__class__.__name__}(kernel_size={self.kernel_size}, "
+    #             f"sigma={self.sigma}, border_type={self.flags['border_type']}, "
+    #             f"{super().__repr__()})")
+
+    # def generate_parameters(self, batch_shape: torch.Size) -> Dict[str, Tensor]:
+    #     # sample one sigma per image in [σ_min, σ_max]
+    #     return {
+    #         "sigma": torch.zeros(batch_shape[0])  # batch_shape[0] == B
+    #                       .uniform_(self.sigma[0], self.sigma[1])
+    #     }
+
+    # def apply_transform(
+    #     self,
+    #     input: Tensor,
+    #     params: Dict[str, Tensor],
+    #     flags: Dict[str, Any],
+    #     transform: Optional[Tensor] = None
+    # ) -> Tensor:
+    #     # 1) pad
+    #     k = self.kernel_size
+    #     pad = k // 2
+    #     padded = F.pad(input, (pad, pad, pad, pad), mode=flags["border_type"])
+
+    #     # 2) build batch-of-kernels
+    #     sigma = params["sigma"].to(input.device)                 # [B]
+    #     x     = torch.linspace(-pad, pad, steps=k, device=input.device, dtype=input.dtype)
+    #     pdf   = torch.exp(-0.5 * (x[None, :] / sigma[:, None]).pow(2))
+    #     k1d   = pdf / pdf.sum(dim=1, keepdim=True)               # [B, K]
+    #     k2d   = torch.bmm(k1d[:, :, None], k1d[:, None, :])      # [B, K, K]
+
+    #     # 3) grouped conv: swap B<->C so that conv sees batch as its “channel” axis
+    #     x = padded.transpose(0, 1)                               # [C, B, H, W]
+    #     out = F.conv2d(
+    #         x,
+    #         k2d[:, None],                                        # [B, 1, K, K]
+    #         groups=x.shape[1]                                    # = B, the batch size
+    #     )
+    #     out = out.transpose(0, 1)                                # [B, C, H, W]
+
+    #     return out
+    
+
+def apply_adjust_brightness(img1, params):
+    ratio = params['brightness_factor'][:, None, None, None].to(img1.device)
+    img2 = torch.zeros_like(img1)
+    return (ratio * img1 + (1.0-ratio) * img2).clamp(0, 1)
+
+
+def apply_adjust_contrast(img1, params):
+    ratio = params['contrast_factor'][:, None, None, None].to(img1.device)
+    img2 = 0.2989 * img1[:, 0:1] + 0.587 * img1[:, 1:2] + 0.114 * img1[:, 2:3]
+    img2 = torch.mean(img2, dim=(-2, -1), keepdim=True)
+    return (ratio * img1 + (1.0-ratio) * img2).clamp(0, 1)
