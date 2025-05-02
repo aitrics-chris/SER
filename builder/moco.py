@@ -153,21 +153,8 @@ def train_equimod(model, images, inv_samples_num, aug_equi, _mean, _std, moco_m,
     # return loss, loss_inv, loss_equiv, loss_list_inv, loss_list_equiv
 
 
-def train_augself(model, images, inv_samples_num, aug_equi, _mean, _std, moco_m, loss_list_inv, loss_list_equiv, args):    
-    
-    model.module.forward = model.module.inv
-    with torch.no_grad():
-        images_inv_0 = aug_equi.aug_inv1(images[0]).sub_(_mean).div_(_std)
-        images_inv_1 = aug_equi.aug_inv2(images[1]).sub_(_mean).div_(_std)
-    
-    with torch.autocast(device_type="cuda"):
-        loss = model(images_inv_0, images_inv_1, moco_m)
-        loss_inv = loss
-        loss_equiv = torch.tensor([0.0])
-    if args.rank == 0:
-        loss_list_inv.append(loss_inv.item())
-        
-    return loss, loss_inv, loss_equiv, loss_list_inv, loss_list_equiv
+def train_augself(model, images, inv_samples_num, aug_equi, _mean, _std, moco_m, loss_list_inv, loss_list_equiv, args):        
+    raise NotImplementedError('Use augself branch instead!!')
 
 
 
@@ -219,10 +206,10 @@ class MoCo(nn.Module):
             param_m.data.copy_(param_b.data)  # initialize
             param_m.requires_grad = False  # not update by gradient
         
-        if args.equiv_mode == 'erl':
-            self.forward = self.equiv
-        else:
-            self.forward = self.inv
+        # if args.equiv_mode == 'erl':
+        #     self.forward = self.equiv
+        # else:
+        #     self.forward = self.inv
 
     def _build_mlp(self, num_layers, input_dim, mlp_dim, output_dim, last_bn=True):
         mlp = []
