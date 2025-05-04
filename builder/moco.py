@@ -417,7 +417,9 @@ class MoCo(nn.Module):
         cls_k1 = self.momentum_encoder.head(cls_k1)
         loss_inv = self.loss_inv(cls_q0, cls_q1, cls_k0, cls_k1)
 
-        yt = self.projector_equiv(torch.cat([_cls_q0, _cls_q1], dim=0))
+        _cls_q0 = self.projector_equiv(_cls_q0)
+        _cls_q1 = self.projector_equiv(_cls_q1)
+        yt = torch.cat([_cls_q0, _cls_q1], dim=0)
         y0 = self.projector_equiv(self.base_encoder.forward_inv(images_transform_no))
         y0 = torch.cat([y0, y0], dim=0)
 
