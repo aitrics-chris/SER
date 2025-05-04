@@ -4,8 +4,13 @@ import numpy as np
 from .utils import load_mlp_augself
 
 
-def train_inv(model, images, inv_samples_num, aug_equi, _mean, _std, moco_m, loss_list_inv, loss_list_equiv, args):
+def train_inv(model, images, inv_samples_num, aug_equi, _mean, _std, moco_m, loss_list_inv, loss_list_equiv, args, etc):
+    
     model.module.forward = model.module.inv
+
+    for i in range(len(images)):
+        images[i] = images[i].cuda(args.gpu, non_blocking=True)
+
     with torch.no_grad():
         images_inv_0 = aug_equi.aug_inv1(images[0]).sub_(_mean).div_(_std)
         images_inv_1 = aug_equi.aug_inv2(images[1]).sub_(_mean).div_(_std)
@@ -20,8 +25,12 @@ def train_inv(model, images, inv_samples_num, aug_equi, _mean, _std, moco_m, los
     return loss, loss_inv, loss_equiv, loss_list_inv, loss_list_equiv
 
 
-def train_erl_inv(model, images, inv_samples_num, aug_equi, _mean, _std, moco_m, loss_list_inv, loss_list_equiv, args):
+def train_erl_inv(model, images, inv_samples_num, aug_equi, _mean, _std, moco_m, loss_list_inv, loss_list_equiv, args, etc):
     model.module.forward = model.module.equiv
+
+    for i in range(len(images)):
+        images[i] = images[i].cuda(args.gpu, non_blocking=True)
+
     ################# Inv: 2-augmentation (color) ###############
     with torch.no_grad():
         images_inv_0 = aug_equi.aug_inv1(images[0][:inv_samples_num, ::]).sub_(_mean).div_(_std)
@@ -42,8 +51,12 @@ def train_erl_inv(model, images, inv_samples_num, aug_equi, _mean, _std, moco_m,
 
     return loss, loss_inv, loss_equiv, loss_list_inv, loss_list_equiv
 
-def train_inv_essl(model, images, inv_samples_num, aug_equi, _mean, _std, moco_m, loss_list_inv, loss_list_equiv, args):
+def train_inv_essl(model, images, inv_samples_num, aug_equi, _mean, _std, moco_m, loss_list_inv, loss_list_equiv, args, etc):
     model.module.forward = model.module.inv_essl
+
+    for i in range(len(images)):
+        images[i] = images[i].cuda(args.gpu, non_blocking=True)
+
     with torch.no_grad():
         images_inv_0 = aug_equi.aug_inv1(images[0]).sub_(_mean).div_(_std)
         images_inv_1 = aug_equi.aug_inv2(images[1]).sub_(_mean).div_(_std)
@@ -77,8 +90,12 @@ def train_inv_essl(model, images, inv_samples_num, aug_equi, _mean, _std, moco_m
         
     return loss_inv, loss_inv, loss_equiv, loss_list_inv, loss_list_equiv
 
-def train_erl_local4(model, images, inv_samples_num, aug_equi, _mean, _std, moco_m, loss_list_inv, loss_list_equiv, args):
+def train_erl_local4(model, images, inv_samples_num, aug_equi, _mean, _std, moco_m, loss_list_inv, loss_list_equiv, args, etc):
     model.module.forward = model.module.erl_local4
+
+    for i in range(len(images)):
+        images[i] = images[i].cuda(args.gpu, non_blocking=True)
+
     image_global = []
     image_local = []
     ################# Inv: 2-augmentation (color) ###############
@@ -103,8 +120,12 @@ def train_erl_local4(model, images, inv_samples_num, aug_equi, _mean, _std, moco
     return loss, loss_inv, loss_equiv, loss_list_inv, loss_list_equiv
 
 
-def train_essl(model, images, inv_samples_num, aug_equi, _mean, _std, moco_m, loss_list_inv, loss_list_equiv, args):
+def train_essl(model, images, inv_samples_num, aug_equi, _mean, _std, moco_m, loss_list_inv, loss_list_equiv, args, etc):
     model.module.forward = model.module.inv
+
+    for i in range(len(images)):
+        images[i] = images[i].cuda(args.gpu, non_blocking=True)
+
     with torch.no_grad():
         images_inv_0 = aug_equi.aug_inv1(images[0]).sub_(_mean).div_(_std)
         images_inv_1 = aug_equi.aug_inv2(images[1]).sub_(_mean).div_(_std)
@@ -143,17 +164,38 @@ def train_essl(model, images, inv_samples_num, aug_equi, _mean, _std, moco_m, lo
     return loss, loss_inv, loss_equiv, loss_list_inv, loss_list_equiv
 
 
-def train_stl(model, images, inv_samples_num, aug_equi, _mean, _std, moco_m, loss_list_inv, loss_list_equiv, args):
+def train_stl(model, images, inv_samples_num, aug_equi, _mean, _std, moco_m, loss_list_inv, loss_list_equiv, args, etc):
     pass
     # return loss, loss_inv, loss_equiv, loss_list_inv, loss_list_equiv
 
 
-def train_equimod(model, images, inv_samples_num, aug_equi, _mean, _std, moco_m, loss_list_inv, loss_list_equiv, args):
-    pass
-    # return loss, loss_inv, loss_equiv, loss_list_inv, loss_list_equiv
+def train_equimod(model, images, inv_samples_num, aug_equi, _mean, _std, moco_m, loss_list_inv, loss_list_equiv, args, etc):
+    assert len(images) == 5
+    model.module.forward = model.module.equimod
+
+    for i in range(len(images)):
+        images[i] = images[i].cuda(args.gpu, non_blocking=True)
+
+    with torch.no_grad():
+        images_transform_no = images[0].sub_(_mean).div_(_std)
+        images_transform_0 = images[1].sub_(_mean).div_(_std)
+        images_transform_1 = images[3].sub_(_mean).div_(_std)
+    
+    # x = torch.cat([images_transform_no, images_transform_0, images_transform_1], dim=0)
+    p = torch.cat([images[2], images[4]], dim=0)
+    p = (p - etc['p_mean'])/etc['p_std']
+    
+    with torch.autocast(device_type="cuda"):
+        loss, loss_inv, loss_equiv = model(images_transform_no, images_transform_0, images_transform_1, moco_m, p, args.equiv_lambda)
+
+    if args.rank == 0:
+        loss_list_equiv.append(loss_equiv.item())
+        loss_list_inv.append(loss_inv.item())
+        
+    return loss, loss_inv, loss_equiv, loss_list_inv, loss_list_equiv
 
 
-def train_augself(model, images, inv_samples_num, aug_equi, _mean, _std, moco_m, loss_list_inv, loss_list_equiv, args):        
+def train_augself(model, images, inv_samples_num, aug_equi, _mean, _std, moco_m, loss_list_inv, loss_list_equiv, args, etc):        
     raise NotImplementedError('Use augself branch instead!!')
 
 
@@ -200,6 +242,28 @@ class MoCo(nn.Module):
                                                     nn.Linear(256, 4))  # output layer    
         elif args.equiv_mode.split('_')[0] == 'augself':
             self.projector_equiv = load_mlp_augself(n_in=384*2, n_hidden=512, n_out=args.moco_dim, num_layers=3, last_bn=False) # args.moco_dim is 256 by default
+        elif args.equiv_mode.split('_')[0] == 'equimod':
+            y_dim = 128
+            p_dim = 18
+            self.projector_equiv = nn.Sequential(
+                                                    torch.nn.Linear(384, 384, bias=False),
+                                                    torch.nn.BatchNorm1d(384),
+                                                    torch.nn.ReLU(),
+                                                    torch.nn.Linear(384, 384, bias=False),
+                                                    torch.nn.BatchNorm1d(384),
+                                                    torch.nn.ReLU(),
+                                                    torch.nn.Linear(384, y_dim, bias=False), # self.y_dim = 128
+                                                    torch.nn.BatchNorm1d(y_dim, affine=False)
+                                                )
+            self.proj_head_t = torch.nn.Sequential(
+                                                    torch.nn.Linear(p_dim, y_dim, bias=False), # p_dim = 15 
+                                                    torch.nn.BatchNorm1d(y_dim)
+                                                )
+
+            self.predictor_eq = torch.nn.Sequential(
+                                                    torch.nn.Linear(y_dim+y_dim, y_dim, bias=False),
+                                                    torch.nn.BatchNorm1d(y_dim, affine=False)
+                                                )
 
 
         for param_b, param_m in zip(self.base_encoder.parameters(), self.momentum_encoder.parameters()):
@@ -252,6 +316,19 @@ class MoCo(nn.Module):
         labels = (torch.arange(N, dtype=torch.long) + N * torch.distributed.get_rank()).cuda()
         # labels = (torch.arange(N, dtype=torch.long)).cuda()
         return nn.CrossEntropyLoss()(logits, labels) * (2 * self.T)
+    
+    def contrastive_loss_temp(self, q, k, temp):
+        # normalize
+        q = nn.functional.normalize(q, dim=1)
+        k = nn.functional.normalize(k, dim=1)
+        # gather all targets
+        k = concat_all_gather(k)
+        # Einstein sum is more intuitive
+        logits = torch.einsum('nc,mc->nm', [q, k]) / temp
+        N = logits.shape[0]  # batch size per GPU
+        labels = (torch.arange(N, dtype=torch.long) + N * torch.distributed.get_rank()).cuda()
+        # labels = (torch.arange(N, dtype=torch.long)).cuda()
+        return nn.CrossEntropyLoss()(logits, labels) * (2 * temp)
 
     def forward_inv(self, x1, x2, m):
         """
@@ -331,7 +408,27 @@ class MoCo(nn.Module):
 
         return q1, q2, k1, k2, equiv_q1, equiv_q2, equiv_k1, equiv_k2
     
-    
+    def equimod(self, images_transform_no, images_inv_0, images_inv_1, moco_m, params, equiv_lambda):
+        
+        _cls_q0, _cls_q1, cls_k0, cls_k1 = self.forward_inv(images_inv_0, images_inv_1, moco_m)
+        cls_q0 = self.predictor(self.base_encoder.head(_cls_q0))
+        cls_q1 = self.predictor(self.base_encoder.head(_cls_q1))
+        cls_k0 = self.momentum_encoder.head(cls_k0)
+        cls_k1 = self.momentum_encoder.head(cls_k1)
+        loss_inv = self.loss_inv(cls_q0, cls_q1, cls_k0, cls_k1)
+
+        yt = self.projector_equiv(torch.cat([_cls_q0, _cls_q1], dim=0))
+        y0 = self.projector_equiv(self.base_encoder.forward_inv(images_transform_no))
+        y0 = torch.cat([y0, y0], dim=0)
+
+        p = self.proj_head_t(params)
+        yt_hat = self.predictor_eq(torch.cat([y0, p], dim=1))
+
+        loss_equiv = 0.5*(self.contrastive_loss_temp(yt, yt_hat, self.args.temperature_equiv) + self.contrastive_loss_temp(yt_hat, yt, self.args.temperature_equiv))
+        loss = loss_inv + (loss_equiv * equiv_lambda)
+        return loss, loss_inv, loss_equiv
+
+
     def inv(self, images_inv_0, images_inv_1, moco_m):
         
         cls_q0, cls_q1, cls_k0, cls_k1 = self.forward_inv(images_inv_0, images_inv_1, moco_m)

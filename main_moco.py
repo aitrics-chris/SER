@@ -107,8 +107,8 @@ parser.add_argument('--equiv-aspect-ratio', type=float, nargs='+', default=(3./4
 # parser.add_argument('--fixed-ratio', type=float, default=0.5, help="""Ratio of minibatch for equivariance loss""")
 parser.add_argument('--equiv-lambda', type=float, default=1.0, help="""lambda for equivariance loss" """)
 # parser.add_argument('--equiv-ratio', type=float, default=0.5, help="""Ratio of minibatch for equivariance loss""")
-parser.add_argument('--equiv-mode', default='erl_local4', choices=['erl_inv', 'essl', 'stl', 'equimod', 'augself', 'inv', 'erl_local4', 'inv_essl'], type=str, help='equivariance mode, erl is ours')
-parser.add_argument('--equiv-layer', default=3, type=int, help='layer to impose equiv')
+parser.add_argument('--equiv-mode', default='equimod', choices=['erl_inv', 'essl', 'stl', 'equimod', 'augself', 'inv', 'erl_local4', 'inv_essl'], type=str, help='equivariance mode, erl is ours')
+parser.add_argument('--equiv-layer', default=12, type=int, help='layer to impose equiv')
 
 ## For equiv sampler scheduler
 parser.add_argument('--warmup-epochs-scheduler', default=0, type=int, help='number of warmup epochs for scheduler')
@@ -218,7 +218,7 @@ def main():
     args.batch_size = int(args.batch_size / args.world_size)
     # args.data_mode = args.equiv_mode if args.equiv_mode != 'erl' else 'inv'
     args.data_mode = args.equiv_mode.split('_')[-1]
-    train_dataset = loaders.__dict__[f'get_dataset_{args.data_mode}'](args)
+    train_dataset, etc = loaders.__dict__[f'get_dataset_{args.data_mode}'](args)
     train_sampler = torch.utils.data.distributed.DistributedSampler(train_dataset)
     data_loader = torch.utils.data.DataLoader(
         train_dataset, batch_size=args.batch_size, shuffle=(train_sampler is None),
@@ -253,7 +253,7 @@ def main():
         # pass
         # train for one epoch
         loss_list_inv, loss_list_equiv = train(data_loader, model, optimizer, scaler, summary_writer, epoch, args, \
-                                               _mean, _std, aug_equi, equi_scheduler, train_one_step, loss_list_inv, loss_list_equiv)
+                                               _mean, _std, aug_equi, equi_scheduler, train_one_step, loss_list_inv, loss_list_equiv, etc)
 
         # if not args.multiprocessing_distributed or (args.multiprocessing_distributed
         #         and args.rank == 0): # only the first GPU saves checkpoint
@@ -303,7 +303,7 @@ def main():
     #     client.close()
 
 def train(data_loader, model, optimizer, scaler, summary_writer, epoch, args, _mean, _std, \
-          aug_equi, equi_scheduler, train_one_step, _loss_list_inv, _loss_list_equiv):
+          aug_equi, equi_scheduler, train_one_step, _loss_list_inv, _loss_list_equiv, etc):
     batch_time = AverageMeter('Time', ':6.3f')
     data_time = AverageMeter('Data', ':6.3f')
     learning_rates = AverageMeter('LR', ':.4e')
@@ -338,12 +338,8 @@ def train(data_loader, model, optimizer, scaler, summary_writer, epoch, args, _m
         # if args.moco_m_cos: # always True
         moco_m = adjust_moco_momentum(epoch + _step / iters_per_epoch, args)
 
-        if args.gpu is not None:
-            for i in range(len(images)):
-                images[i] = images[i].cuda(args.gpu, non_blocking=True)
-
         # return overall loss
-        loss, loss_inv, loss_equiv, _loss_list_inv, _loss_list_equiv = train_one_step(model, images, inv_samples_num, aug_equi, _mean, _std, moco_m, _loss_list_inv, _loss_list_equiv, args)
+        loss, loss_inv, loss_equiv, _loss_list_inv, _loss_list_equiv = train_one_step(model, images, inv_samples_num, aug_equi, _mean, _std, moco_m, _loss_list_inv, _loss_list_equiv, args, etc)
         losses.update(loss.item(), images[0].size(0))
         loss_invs.update(loss_inv.item(), images[0].size(0))
         loss_equivs.update(loss_equiv.item(), images[0].size(0))

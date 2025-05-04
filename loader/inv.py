@@ -37,7 +37,7 @@ def get_dataset_inv(args):
     ]
 
     return datasets.ImageFolder(os.path.join(args.data, 'train'),
-        MultiCropsTransform([transforms.Compose(augmentation1), transforms.Compose(augmentation2)]))
+        MultiCropsTransform([transforms.Compose(augmentation1), transforms.Compose(augmentation2)])), None
     
 
 class MultiCropsTransform:

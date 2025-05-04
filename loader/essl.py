@@ -27,5 +27,5 @@ def get_dataset_essl(args):
     ]
 
     return datasets.ImageFolder(os.path.join(args.data, 'train'),
-        MultiCropsTransform([transforms.Compose(augmentation1), transforms.Compose(augmentation2), transforms.Compose(augmentation3)]))
+        MultiCropsTransform([transforms.Compose(augmentation1), transforms.Compose(augmentation2), transforms.Compose(augmentation3)])), None
     

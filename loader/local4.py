@@ -47,7 +47,7 @@ def get_dataset_local4(args):
     ]
 
     return datasets.ImageFolder(os.path.join(args.data, 'train'),
-        MultiCropsTransform([transforms.Compose(augmentation1), transforms.Compose(augmentation2), transforms.Compose(augmentation3), transforms.Compose(augmentation4)]))
+        MultiCropsTransform([transforms.Compose(augmentation1), transforms.Compose(augmentation2), transforms.Compose(augmentation3), transforms.Compose(augmentation4)])), None
     
 
 class MultiCropsTransform:

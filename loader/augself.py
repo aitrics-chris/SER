@@ -9,7 +9,7 @@ from .inv import MultiCropsTransform
 
 def get_dataset_augself(args):
     transform = MultiView(RandomResizedCrop(224, scale=(args.crop_min, 1.), interpolation=args.interpolation))
-    return datasets.ImageFolder(os.path.join(args.data, 'train'), transform)
+    return datasets.ImageFolder(os.path.join(args.data, 'train'), transform), None
 
 
 class MultiView:
