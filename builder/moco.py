@@ -303,8 +303,6 @@ class MoCo(nn.Module):
             self.shifted_idxs = torch.flatten(torch.stack([self.odd_idxs, self.even_idxs], dim=1))
 
 
-        else:
-            raise ValueError(f'Invalid equivarience mode: {args.equiv_mode}')
 
 
         for param_b, param_m in zip(self.base_encoder.parameters(), self.momentum_encoder.parameters()):

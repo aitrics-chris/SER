@@ -325,7 +325,7 @@ def train(data_loader, model, optimizer, scaler, summary_writer, epoch, args, _m
     end = time.time()
     iters_per_epoch = len(data_loader)
     moco_m = args.moco_m
-    for _step, images in enumerate(data_loader):
+    for _step, (images, _) in enumerate(data_loader):
         
         ############### To determine data portion for equiv and inv ###############
         step_all = len(data_loader) * epoch + _step
