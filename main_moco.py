@@ -107,7 +107,7 @@ parser.add_argument('--equiv-aspect-ratio', type=float, nargs='+', default=(3./4
 # parser.add_argument('--fixed-ratio', type=float, default=0.5, help="""Ratio of minibatch for equivariance loss""")
 parser.add_argument('--equiv-lambda', type=float, default=1.0, help="""lambda for equivariance loss" """)
 # parser.add_argument('--equiv-ratio', type=float, default=0.5, help="""Ratio of minibatch for equivariance loss""")
-parser.add_argument('--equiv-mode', default='equimod', choices=['erl_inv', 'essl', 'stl', 'equimod', 'augself', 'inv', 'erl_local4', 'inv_essl'], type=str, help='equivariance mode, erl is ours')
+parser.add_argument('--equiv-mode', default='stl', choices=['erl_inv', 'essl', 'stl', 'equimod', 'augself', 'inv', 'erl_local4', 'inv_essl'], type=str, help='equivariance mode, erl is ours')
 parser.add_argument('--equiv-layer', default=12, type=int, help='layer to impose equiv')
 
 ## For equiv sampler scheduler
@@ -117,9 +117,13 @@ parser.add_argument('--equiv-ratio-start', type=float, default=0.02, help="""Rat
 parser.add_argument('--equiv-ratio-end', type=float, default=0.0, help="""Ratio of minibatch for equivariance loss""")
 parser.add_argument('--tag', default='exxx', type=str, help='append at the end of the foldername')
 
-parser.add_argument('--temperature-equiv', type=float, default=0.5, help="""Temperature for InfoNCE""")
+parser.add_argument('--temperature-equiv', type=float, default=0.2, help="""Temperature for InfoNCE""")
 parser.add_argument('--clip_grad', type=float, default=0.0, help="""Maximal parameter gradient norm if using gradient clipping. 
                     Clipping with norm .3 ~ 1.0 can help optimization for larger ViT architectures. 0 for disabling.""")
+
+parser.add_argument('--stl-lambda-equi', type=float, default=1.0, help="lambda for STL for equivariant loss")
+parser.add_argument('--stl-lambda-trans', type=float, default=0.1, help="lambda for STL for transformation loss")
+
 
 def main():
     args = parser.parse_args()
@@ -321,7 +325,7 @@ def train(data_loader, model, optimizer, scaler, summary_writer, epoch, args, _m
     end = time.time()
     iters_per_epoch = len(data_loader)
     moco_m = args.moco_m
-    for _step, (images, _) in enumerate(data_loader):
+    for _step, images in enumerate(data_loader):
         
         ############### To determine data portion for equiv and inv ###############
         step_all = len(data_loader) * epoch + _step

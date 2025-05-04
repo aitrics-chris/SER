@@ -1174,3 +1174,56 @@ def reset_parameters_augself(model):
             if m.bias is not None:
                 nn.init.uniform_(m.bias, -bound, bound)
                 
+
+
+class EquiTrans(nn.Module):
+    """
+    Hypernetwork-style transformation module.
+    """
+    def __init__(self, equi_repr_dim: int, trans_repr_dim: int):
+        super().__init__()
+        self.equitrans_layers = [equi_repr_dim, equi_repr_dim]
+
+        # Calculate parameters needed for each block
+        self.num_weights_per_block = [
+            self.equitrans_layers[i] * self.equitrans_layers[i + 1]
+            for i in range(len(self.equitrans_layers) - 1)
+        ]
+        self.cumulative_params = [0] + list(np.cumsum(self.num_weights_per_block))
+
+        # Hypernetwork to generate weights
+        self.hypernet = nn.Linear(trans_repr_dim, self.cumulative_params[-1], bias=False)
+
+    def forward(self, r: torch.Tensor, t: torch.Tensor) -> torch.Tensor:
+        """
+        Apply transformation predicted by `t` on representation `r`.
+        """
+        all_weights = self.hypernet(t)  # shape: [B, total_params]
+        output = r.unsqueeze(1)
+
+        # Sequentially apply linear blocks
+        for i in range(len(self.equitrans_layers) - 1):
+            start_idx = self.cumulative_params[i]
+            end_idx = start_idx + self.num_weights_per_block[i]
+
+            w_block = all_weights[..., start_idx:end_idx]
+            w_reshaped = w_block.view(-1,
+                                      self.equitrans_layers[i + 1],
+                                      self.equitrans_layers[i])
+            output = torch.bmm(output, w_reshaped.transpose(-2, -1))
+
+        return output.squeeze()
+
+def load_mlp_stl(input_dim: int, layers_str: str) -> nn.Sequential:
+    """
+    Build a simple MLP given the layer configuration string (e.g., '512-128').
+    """
+    sizes = [input_dim] + list(map(int, layers_str.split('-')))
+    layer_list = []
+    for i in range(len(sizes) - 2):
+        layer_list.append(nn.Linear(sizes[i], sizes[i + 1], bias=False))
+        layer_list.append(nn.BatchNorm1d(sizes[i + 1]))
+        layer_list.append(nn.ReLU(inplace=True))
+    layer_list.append(nn.Linear(sizes[-2], sizes[-1], bias=False))
+
+    return nn.Sequential(*layer_list)

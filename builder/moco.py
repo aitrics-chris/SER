@@ -1,7 +1,7 @@
 import torch
 import torch.nn as nn
 import numpy as np
-from .utils import load_mlp_augself
+from .utils import load_mlp_augself, load_mlp_stl, EquiTrans
 
 
 def train_inv(model, images, inv_samples_num, aug_equi, _mean, _std, moco_m, loss_list_inv, loss_list_equiv, args, etc):
@@ -165,8 +165,25 @@ def train_essl(model, images, inv_samples_num, aug_equi, _mean, _std, moco_m, lo
 
 
 def train_stl(model, images, inv_samples_num, aug_equi, _mean, _std, moco_m, loss_list_inv, loss_list_equiv, args, etc):
-    pass
-    # return loss, loss_inv, loss_equiv, loss_list_inv, loss_list_equiv
+    assert len(images) == 2
+    model.module.forward = model.module.stl
+
+    for i in range(len(images)):
+        images[i] = images[i].cuda(args.gpu, non_blocking=True)
+
+    with torch.no_grad():
+        images_0 = images[0].sub_(_mean).div_(_std)
+        images_1 = images[1].sub_(_mean).div_(_std)
+    
+    
+    with torch.autocast(device_type="cuda"):
+        loss, loss_inv, loss_equiv = model(images_0, images_1, moco_m, args.equiv_lambda)
+
+    if args.rank == 0:
+        loss_list_equiv.append(loss_equiv.item())
+        loss_list_inv.append(loss_inv.item())
+        
+    return loss, loss_inv, loss_equiv, loss_list_inv, loss_list_equiv
 
 
 def train_equimod(model, images, inv_samples_num, aug_equi, _mean, _std, moco_m, loss_list_inv, loss_list_equiv, args, etc):
@@ -264,6 +281,30 @@ class MoCo(nn.Module):
                                                     torch.nn.Linear(y_dim+y_dim, y_dim, bias=False),
                                                     torch.nn.BatchNorm1d(y_dim, affine=False)
                                                 )
+        elif args.equiv_mode.split('_')[0] == 'stl':
+            # Transform backbone
+            trans_repr_dim = 128
+            repr_dim = 384
+            projector = '512-128'
+            trans_backbone = '128-128'
+            trans_projector = '128-128'
+            self.trans_backbone = load_mlp_stl(2 * repr_dim, trans_backbone)
+            self.equi_transform = EquiTrans(repr_dim, trans_repr_dim)
+
+            # Projectors
+            # self.inv_projector = load_mlp_stl(repr_dim, projector)
+            self.projector_equiv = load_mlp_stl(repr_dim, projector)
+            self.trans_projector = load_mlp_stl(trans_repr_dim, trans_projector)
+
+            # Index helpers for rearranging
+            batch_size = args.batch_size
+            self.even_idxs = 2 * torch.arange(batch_size // 2)
+            self.odd_idxs = 2 * torch.arange(batch_size // 2) + 1
+            self.shifted_idxs = torch.flatten(torch.stack([self.odd_idxs, self.even_idxs], dim=1))
+
+
+        else:
+            raise ValueError(f'Invalid equivarience mode: {args.equiv_mode}')
 
 
         for param_b, param_m in zip(self.base_encoder.parameters(), self.momentum_encoder.parameters()):
@@ -439,6 +480,40 @@ class MoCo(nn.Module):
         cls_k0 = self.momentum_encoder.head(cls_k0)
         cls_k1 = self.momentum_encoder.head(cls_k1)
         return self.loss_inv(cls_q0, cls_q1, cls_k0, cls_k1)
+    
+    def stl(self, images_0, images_1, moco_m, equiv_lambda):
+        _cls_q0, _cls_q1, cls_k0, cls_k1 = self.forward_inv(images_0, images_1, moco_m)
+        cls_q0 = self.predictor(self.base_encoder.head(_cls_q0))
+        cls_q1 = self.predictor(self.base_encoder.head(_cls_q1))
+        cls_k0 = self.momentum_encoder.head(cls_k0)
+        cls_k1 = self.momentum_encoder.head(cls_k1)
+        loss_inv = self.loss_inv(cls_q0, cls_q1, cls_k0, cls_k1)
+
+        # Transformation backbone
+        y_trans122 = self.trans_backbone(torch.cat([_cls_q0, _cls_q1], dim=-1))
+        y_trans221 = self.trans_backbone(torch.cat([_cls_q1, _cls_q0], dim=-1))
+
+        # Split into y_trans1, y_trans2
+        y_trans1 = torch.cat([y_trans122[self.even_idxs], y_trans221[self.even_idxs]], dim=0)
+        y_trans2 = torch.cat([y_trans122[self.odd_idxs], y_trans221[self.odd_idxs]], dim=0)
+
+        # Equivariant transform
+        y_pred1 = self.equi_transform(_cls_q1, y_trans221[self.shifted_idxs])
+        y_pred2 = self.equi_transform(_cls_q0, y_trans122[self.shifted_idxs])
+
+        # Equivariance loss
+        z_equi = torch.cat([self.projector_equiv(_cls_q0), self.projector_equiv(_cls_q1)], dim=0)
+        z_equi_pred = torch.cat([self.projector_equiv(y_pred1), self.projector_equiv(y_pred2)], dim=0)
+        equi_loss = self.contrastive_loss(z_equi, z_equi_pred) + self.contrastive_loss(z_equi_pred, z_equi) # 0.2 for both moco_t and stl default
+
+        # Transformation loss
+        z_trans1, z_trans2 = self.trans_projector(y_trans1), self.trans_projector(y_trans2)
+        trans_loss = self.contrastive_loss(z_trans1, z_trans2) + self.contrastive_loss(z_trans2, z_trans1)
+
+        loss = loss_inv + (equi_loss * self.args.stl_lambda_equi) + (trans_loss * self.args.stl_lambda_trans)
+        return loss, loss_inv, equi_loss
+
+
 
 
     def inv_essl(self, images_inv_0, images_inv_1, images_localview, moco_m):
