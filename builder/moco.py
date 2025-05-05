@@ -94,7 +94,7 @@ def train_inv_local4(model, images, inv_samples_num, aug_equi, _mean, _std, moco
     model.module.forward = model.module.inv_local4
 
     for i in range(len(images)):
-        images[i] = images[i].cuda(args.gpu, non_blocking=True).to(torch.float32)
+        images[i] = images[i].cuda(args.gpu, non_blocking=True)
 
     with torch.no_grad():
         images[0] = aug_equi.aug_inv1(images[0]).sub_(_mean).div_(_std)
