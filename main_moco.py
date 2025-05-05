@@ -108,7 +108,7 @@ parser.add_argument('--equiv-aspect-ratio', type=float, nargs='+', default=(3./4
 # parser.add_argument('--fixed-ratio', type=float, default=0.5, help="""Ratio of minibatch for equivariance loss""")
 parser.add_argument('--equiv-lambda', type=float, default=1.0, help="""lambda for equivariance loss" """)
 # parser.add_argument('--equiv-ratio', type=float, default=0.5, help="""Ratio of minibatch for equivariance loss""")
-parser.add_argument('--equiv-mode', default='stl', choices=['erl_inv', 'essl', 'stl', 'equimod', 'augself', 'inv', 'erl_local4', 'inv_essl'], type=str, help='equivariance mode, erl is ours')
+parser.add_argument('--equiv-mode', default='stl', choices=['erl_inv', 'essl', 'stl', 'equimod', 'augself', 'inv', 'erl_local2', 'inv_essl', 'inv_local4'], type=str, help='equivariance mode, erl is ours')
 parser.add_argument('--equiv-layer', default=12, type=int, help='layer to impose equiv')
 
 ## For equiv sampler scheduler
