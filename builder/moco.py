@@ -164,20 +164,22 @@ def train_essl(model, images, inv_samples_num, aug_equi, _mean, _std, moco_m, lo
     return loss, loss_inv, loss_equiv, loss_list_inv, loss_list_equiv
 
 
-def train_stl(model, images, inv_samples_num, aug_equi, _mean, _std, moco_m, loss_list_inv, loss_list_equiv, args, etc):
-    assert len(images) == 2
-    model.module.forward = model.module.stl
-
-    for i in range(len(images)):
-        images[i] = images[i].cuda(args.gpu, non_blocking=True)
-
-    with torch.no_grad():
-        images_0 = images[0].sub_(_mean).div_(_std)
-        images_1 = images[1].sub_(_mean).div_(_std)
+def train_stl(model, _images, inv_samples_num, aug_equi, _mean, _std, moco_m, loss_list_inv, loss_list_equiv, args, post_transform):
     
+    model.module.forward = model.module.stl
+    bs = _images.shape[0]
+    images = []
+    with torch.no_grad():
+        # for i in range(len(images)):
+        images.append(_images.cuda(args.gpu, non_blocking=True))
+        images.append(images[0].detach().clone())
+        for i in range(2):
+            images[i][0:bs:2, ::] = post_transform['aligned_transform'](images[i][0:bs:2, ::])
+            images[i][1:bs:2, ::] = post_transform['aligned_transform'](images[i][0:bs:2, ::], params = post_transform['aligned_transform']._params)    
+            images[i] = post_transform['invariant_transform'](images[i]).sub_(_mean).div_(_std)
     
     with torch.autocast(device_type="cuda"):
-        loss, loss_inv, loss_equiv = model(images_0, images_1, moco_m, args.equiv_lambda)
+        loss, loss_inv, loss_equiv = model(images[0], images[1], moco_m, args.equiv_lambda)
 
     if args.rank == 0:
         loss_list_equiv.append(loss_equiv.item())
@@ -297,7 +299,7 @@ class MoCo(nn.Module):
             self.trans_projector = load_mlp_stl(trans_repr_dim, trans_projector)
 
             # Index helpers for rearranging
-            batch_size = args.batch_size
+            batch_size = args.batch_size // args.world_size
             self.even_idxs = 2 * torch.arange(batch_size // 2)
             self.odd_idxs = 2 * torch.arange(batch_size // 2) + 1
             self.shifted_idxs = torch.flatten(torch.stack([self.odd_idxs, self.even_idxs], dim=1))

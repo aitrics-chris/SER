@@ -34,6 +34,7 @@ import socket
 import builder.moco as ssls
 from builder.utils import AverageMeter, ProgressMeter
 from torchvision.transforms import InterpolationMode
+from kornia.constants import Resample
 # from scp import SCPClient, SCPException
 # import paramiko
 
@@ -128,6 +129,7 @@ parser.add_argument('--stl-lambda-trans', type=float, default=0.1, help="lambda 
 def main():
     args = parser.parse_args()
     args.interpolation = InterpolationMode.BILINEAR
+    args.interpolation_kornia = Resample.BILINEAR.name
 
     if 'erl' not in args.equiv_mode:
         assert args.equiv_layer == 12
