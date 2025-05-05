@@ -7,10 +7,8 @@ import random
 import torchvision.transforms.functional as tf
 import os
 from typing import List
-from kornia.augmentation.container import ImageSequential
-import kornia
 
-def get_dataset_local4(args):
+def get_dataset_local2(args):
     # ColorJitter, RandomGrayscale, GaussianBlur, Solarize will be performed using Kornia at GPU. See build.utils.Aug_equi.py
     
     augmentation1 = [
@@ -38,36 +36,18 @@ def get_dataset_local4(args):
         # normalize
     ]
     augmentation3 = [
-        transforms.RandomResizedCrop(96, scale=(0.05,0.25)),
+        transforms.RandomResizedCrop(96, scale=(0.05,0.14)),
         transforms.RandomHorizontalFlip(),
         transforms.ToTensor(),
     ]
     augmentation4 = [
-        transforms.RandomResizedCrop(96, scale=(0.05,0.25)),
+        transforms.RandomResizedCrop(96, scale=(0.05,0.14)),
         transforms.RandomHorizontalFlip(),
         transforms.ToTensor(),
     ]
-
-    augmentation5 = [
-        transforms.RandomResizedCrop(96, scale=(0.05,0.25)),
-        transforms.RandomHorizontalFlip(),
-        transforms.ToTensor(),
-    ]
-
-    augmentation6 = [
-        transforms.RandomResizedCrop(96, scale=(0.05,0.25)),
-        transforms.RandomHorizontalFlip(),
-        transforms.ToTensor(),
-    ]
-
-    inv_local = ImageSequential(            
-                                kornia.augmentation.ColorJiggle(0.4, 0.4, 0.2, 0.1, same_on_batch=False, p=0.8),  # not strengthened       
-                                kornia.augmentation.RandomGaussianBlur(kernel_size=(9, 9), sigma=(0.1, 2.0), same_on_batch=False, p=0.5),
-                                )
 
     return datasets.ImageFolder(os.path.join(args.data, 'train'),
-        MultiCropsTransform([transforms.Compose(augmentation1), transforms.Compose(augmentation2), transforms.Compose(augmentation3), \
-                             transforms.Compose(augmentation4), transforms.Compose(augmentation5), transforms.Compose(augmentation6)])), inv_local
+        MultiCropsTransform([transforms.Compose(augmentation1), transforms.Compose(augmentation2), transforms.Compose(augmentation3), transforms.Compose(augmentation4)])), None
     
 
 class MultiCropsTransform:

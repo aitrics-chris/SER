@@ -90,8 +90,31 @@ def train_inv_essl(model, images, inv_samples_num, aug_equi, _mean, _std, moco_m
         
     return loss_inv, loss_inv, loss_equiv, loss_list_inv, loss_list_equiv
 
-def train_erl_local4(model, images, inv_samples_num, aug_equi, _mean, _std, moco_m, loss_list_inv, loss_list_equiv, args, etc):
-    model.module.forward = model.module.erl_local4
+def train_inv_local4(model, images, inv_samples_num, aug_equi, _mean, _std, moco_m, loss_list_inv, loss_list_equiv, args, etc):
+    model.module.forward = model.module.inv_local4
+
+    for i in range(len(images)):
+        images[i] = images[i].cuda(args.gpu, non_blocking=True).to(torch.float32)
+
+    with torch.no_grad():
+        images[0] = aug_equi.aug_inv1(images[0]).sub_(_mean).div_(_std)
+        images[1] = aug_equi.aug_inv2(images[1]).sub_(_mean).div_(_std)
+        for i in range(2, len(images)):
+            images[i] = etc(images[i]).sub_(_mean).div_(_std)
+    
+    with torch.autocast(device_type="cuda"):
+        loss_inv = model(images[:2], images[2:], moco_m)
+        loss_equiv = torch.tensor([0.0])
+
+    if args.rank == 0:
+        loss_list_equiv.append(loss_equiv.item())
+        loss_list_inv.append(loss_inv.item())
+        
+    return loss_inv, loss_inv, loss_equiv, loss_list_inv, loss_list_equiv
+
+
+def train_erl_local2(model, images, inv_samples_num, aug_equi, _mean, _std, moco_m, loss_list_inv, loss_list_equiv, args, etc):
+    model.module.forward = model.module.erl_local2
 
     for i in range(len(images)):
         images[i] = images[i].cuda(args.gpu, non_blocking=True)
@@ -568,7 +591,40 @@ class MoCo(nn.Module):
 
         return loss_inv
 
-    def erl_local4(self, image_global, image_local, aug_equi, moco_m, lambda_equiv):
+
+    def inv_local4(self, image_global, image_local, moco_m):
+        ############### compute semantic inveriance via contrastive loss #############
+        cls_q = [-99, -99, -99, -99, -99, -99]    
+        cls_k = [-99, -99]     
+        
+        with torch.autocast(device_type="cuda"):
+            # both encoder for global view, need to go through head and predictor
+            cls_q[0], cls_q[1], cls_k[0], cls_k[1] = self.forward_inv(image_global[0], image_global[1], moco_m) # momentum for k       
+
+            # student encoder for local view
+            for _local_crop_num in range(4):
+                cls_q[_local_crop_num+2] = self.base_encoder.forward_inv(image_local[_local_crop_num])      
+
+            # head and predictor for CLS from student encoder
+            for _aug_num in range(6):
+                cls_q[_aug_num] = self.predictor(self.base_encoder.head(cls_q[_aug_num]))
+
+            # only head for CLS from teacher encoder
+            for _aug_num in range(2):
+                cls_k[_aug_num] = self.momentum_encoder.head(cls_k[_aug_num])
+            
+            loss_inv = torch.tensor(0.0, requires_grad=True, device=cls_q[0].device)
+
+            for _num_q in range(6):
+               for _num_k in range(2):
+                    if _num_q == _num_k:
+                        continue
+                    else:
+                        loss_inv = loss_inv + self.contrastive_loss(cls_q[_num_q], cls_k[_num_k])
+        return loss_inv
+
+
+    def erl_local2(self, image_global, image_local, aug_equi, moco_m, lambda_equiv):
         """
         Input:
             x1: first views of images
