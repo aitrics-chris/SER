@@ -22,7 +22,7 @@ def get_dataset_stl(args):
     post_transform = {}
 
     post_transform['aligned_transform'] = ImageSequential(            
-                                        kornia.augmentation.RandomResizedCrop((224,224), scale=(args.crop_min, 1.0), resample=args.interpolation_kornia, same_on_batch=False),
+                                        kornia.augmentation.RandomResizedCrop((224,224), scale=(0.2, 1.0), resample=args.interpolation_kornia, same_on_batch=False),
                                         kornia.augmentation.ColorJiggle(0.4, 0.4, 0.2, 0.1, same_on_batch=False, p=0.8),  # not strengthened                                         
                                         kornia.augmentation.RandomGrayscale(same_on_batch=False, p=0.2),
                                     )   

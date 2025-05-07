@@ -198,7 +198,7 @@ def train_stl(model, _images, inv_samples_num, aug_equi, _mean, _std, moco_m, lo
         images.append(images[0].detach().clone())
         for i in range(2):
             images[i][0:bs:2, ::] = post_transform['aligned_transform'](images[i][0:bs:2, ::])
-            images[i][1:bs:2, ::] = post_transform['aligned_transform'](images[i][0:bs:2, ::], params = post_transform['aligned_transform']._params)    
+            images[i][1:bs:2, ::] = post_transform['aligned_transform'](images[i][1:bs:2, ::], params = post_transform['aligned_transform']._params)    
             images[i] = post_transform['invariant_transform'](images[i]).sub_(_mean).div_(_std)
     
     with torch.autocast(device_type="cuda"):
