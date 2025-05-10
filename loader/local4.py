@@ -49,17 +49,17 @@ def get_dataset_local4(args):
     ]
 
     augmentation5 = [
-        transforms.RandomResizedCrop(96, scale=(0.05,0.25)),
+        transforms.RandomResizedCrop(96, scale=(0.05,0.25)), # https://dl.fbaipublicfiles.com/dino/dino_deitsmall16_pretrain/args.txt
         transforms.RandomHorizontalFlip(),
         transforms.ToTensor(),
     ]
 
     augmentation6 = [
-        transforms.RandomResizedCrop(96, scale=(0.05,0.25)),
+        transforms.RandomResizedCrop(96, scale=(0.05,0.25)), # https://dl.fbaipublicfiles.com/dino/dino_deitsmall16_pretrain/args.txt
         transforms.RandomHorizontalFlip(),
         transforms.ToTensor(),
     ]
-
+    # https://github.com/facebookresearch/dino/blob/main/main_dino.py
     inv_local = ImageSequential(            
                                 kornia.augmentation.ColorJiggle(0.4, 0.4, 0.2, 0.1, same_on_batch=False, p=0.8),  # not strengthened       
                                 kornia.augmentation.RandomGaussianBlur(kernel_size=(9, 9), sigma=(0.1, 2.0), same_on_batch=False, p=0.5),
