@@ -711,7 +711,7 @@ class MoCo(nn.Module):
                 # equiv_k[i] = self.momentum_encoder.head(equiv_k[i])
 
             loss_inv = torch.tensor(0.0, requires_grad=True, device=cls_q[0].device)
-            loss_equiv = torch.tensor(0.0, requires_grad=True, device=loss_inv[0].device)
+            loss_equiv = torch.tensor(0.0, requires_grad=True, device=loss_inv.device)
 
             for _num_q in range(6):
                for _num_k in range(2):
