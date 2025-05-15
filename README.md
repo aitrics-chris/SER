@@ -1,2 +1,1 @@
-# erl
-Equivariant Representation Learning
+# Soft Equivariance Regularization for Invariant Self-Supervised Learning
