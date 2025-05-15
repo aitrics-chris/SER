@@ -1,4 +1,4 @@
 # Soft Equivariance Regularization for Invariant Self-Supervised Learning
 
 
-![fig2_gerl](https://github.com/user-attachments/assets/926f8531-1e80-4032-b13f-39f70cd5e7d5)
+![Screenshot 2025-05-16 at 3 11 00 AM](https://github.com/user-attachments/assets/441b716e-41ad-4b2a-8710-b93defd707f9)
