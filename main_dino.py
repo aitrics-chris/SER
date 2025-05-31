@@ -36,7 +36,7 @@ torchvision_archs = sorted(name for name in torchvision_models.__dict__
 
 def get_args_parser():
     parser = argparse.ArgumentParser('DINO', add_help=False)
-    parser.add_argument('--data', default='/home/chris/storage/imagenet/', type=str,
+    parser.add_argument('--data', default='data/imagenet/', type=str,
         help='Please specify path to the ImageNet training data.')
 
     # Model parameters
@@ -114,7 +114,7 @@ def get_args_parser():
         Used for small local view cropping of multi-crop.""")
 
     # Misc
-    parser.add_argument('--output_dir', default="/home/chris/codes/erl/results", type=str, help='Path to save logs and checkpoints.')
+    parser.add_argument('--output_dir', default="codes/erl/results", type=str, help='Path to save logs and checkpoints.')
     parser.add_argument('--seed', default=0, type=int, help='Random seed.')
     parser.add_argument('--num_workers', default=4, type=int, help='Number of data loading workers per GPU.')
     parser.add_argument("--dist_url", default="env://", type=str, help="""url used to set up
@@ -294,7 +294,7 @@ def train_dino(args):
 
     print(f'proj_name: {proj_name}')
     # proj_name = 'ex'
-    args.output_dir = os.path.join(f'/nfs/thena/chris/icml/ckpt_dino', args.equiv_mode, proj_name)
+    args.output_dir = os.path.join(f'ckpts/ckpt_dino', args.equiv_mode, proj_name)
     os.makedirs(args.output_dir, exist_ok=True)
 
     loss_list_equiv = []

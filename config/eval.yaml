@@ -3,16 +3,16 @@ lrs: [ 3.0,10.0, 1.0,3.0, 1.0,3.0, 3.0]
 ckpts: [                   
 
 
-      '/nfs/thena/chris/icml/ckpt_moco/equiv/MoCo_equiv_vit_small_0.0024_0.7_1.3_0.75_0.5_fix_3_0_0_0.01_0.0_clipgrad_0.0_0.4_gilgamesh_ep100__/checkpoint_256_0.0024.pth',
-      '/nfs/thena/chris/icml/ckpt_moco/equiv/MoCo_equiv_vit_small_0.0024_0.7_1.3_0.75_0.5_fix_3_0_0_0.01_0.0_clipgrad_0.0_0.4_gilgamesh_ep100__/checkpoint_256_0.0024.pth',
+      'ckpts/ckpt_moco/equiv/MoCo_equiv_vit_small_0.0024_0.7_1.3_0.75_0.5_fix_3_0_0_0.01_0.0_clipgrad_0.0_0.4_gilgamesh_ep100__/checkpoint_256_0.0024.pth',
+      'ckpts/ckpt_moco/equiv/MoCo_equiv_vit_small_0.0024_0.7_1.3_0.75_0.5_fix_3_0_0_0.01_0.0_clipgrad_0.0_0.4_gilgamesh_ep100__/checkpoint_256_0.0024.pth',
 
-      '/nfs/thena/chris/icml/ckpt_barlowtwins/equiv/BT_equiv_vit_small_0.0001_0.0048_0.7_1.3_0.75_0.5_fix_3_0_0_0.01_0.0_clipgrad_0.3_0.4_sersi_ep100__/checkpoint.pth',
-      '/nfs/thena/chris/icml/ckpt_barlowtwins/equiv/BT_equiv_vit_small_0.0001_0.0048_0.7_1.3_0.75_0.5_fix_3_0_0_0.01_0.0_clipgrad_0.3_0.4_sersi_ep100__/checkpoint.pth',
+      'ckpts/ckpt_barlowtwins/equiv/BT_equiv_vit_small_0.0001_0.0048_0.7_1.3_0.75_0.5_fix_3_0_0_0.01_0.0_clipgrad_0.3_0.4_sersi_ep100__/checkpoint.pth',
+      'ckpts/ckpt_barlowtwins/equiv/BT_equiv_vit_small_0.0001_0.0048_0.7_1.3_0.75_0.5_fix_3_0_0_0.01_0.0_clipgrad_0.3_0.4_sersi_ep100__/checkpoint.pth',
 
-      '/nfs/thena/chris/icml/ckpt_barlowtwins/equiv/BT_equiv_vit_small_0.0001_0.0048_0.7_1.3_0.75_0.5_fix_3_0_0_0.01_0.0_clipgrad_0.3_0.4_phastos_ep100_unfreeze/checkpoint.pth',
-      '/nfs/thena/chris/icml/ckpt_barlowtwins/equiv/BT_equiv_vit_small_0.0001_0.0048_0.7_1.3_0.75_0.5_fix_3_0_0_0.01_0.0_clipgrad_0.3_0.4_phastos_ep100_unfreeze/checkpoint.pth',
+      'ckpts/ckpt_barlowtwins/equiv/BT_equiv_vit_small_0.0001_0.0048_0.7_1.3_0.75_0.5_fix_3_0_0_0.01_0.0_clipgrad_0.3_0.4_phastos_ep100_unfreeze/checkpoint.pth',
+      'ckpts/ckpt_barlowtwins/equiv/BT_equiv_vit_small_0.0001_0.0048_0.7_1.3_0.75_0.5_fix_3_0_0_0.01_0.0_clipgrad_0.3_0.4_phastos_ep100_unfreeze/checkpoint.pth',
 
-      '/nfs/thena/chris/icml/ckpt_barlowtwins/equiv/BT_equiv_vit_small_0.0001_0.0048_0.7_1.3_0.75_1.0_fix_3_0_0_0.01_0.0_clipgrad_0.3_0.4_gilgamesh_ep100__/checkpoint.pth',
+      'ckpts/ckpt_barlowtwins/equiv/BT_equiv_vit_small_0.0001_0.0048_0.7_1.3_0.75_1.0_fix_3_0_0_0.01_0.0_clipgrad_0.3_0.4_gilgamesh_ep100__/checkpoint.pth',
 
 ]
 

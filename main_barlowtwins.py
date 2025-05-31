@@ -35,7 +35,7 @@ from torch.utils.tensorboard import SummaryWriter
 
 parser = argparse.ArgumentParser(description='Barlow Twins Training with equivariance loss')
 parser.add_argument('-a', '--arch', metavar='ARCH', default='vit_small', choices=['vit_small', 'resnet50'])
-parser.add_argument('--data', default='/home/chris/storage/imagenet', help='path to dataset')
+parser.add_argument('--data', default='data/imagenet', help='path to dataset')
 parser.add_argument('--workers', default=8, type=int, metavar='N',
                     help='number of data loader workers')
 parser.add_argument('--epochs', default=50, type=int, metavar='N',
@@ -272,15 +272,15 @@ def main():
                 'loss_list_equiv': np.array(loss_list_equiv),
                 }
     
-    args.output_dir = f'/nfs/thena/chris/icml/ckpt_barlowtwins/{args.equiv_mode}/{proj_name}'
-    args.output_dir_local = f'/home/chris/codes/moco3/results/barlowtwins/{args.equiv_mode}/{proj_name}'
+    args.output_dir = f'ckpts/ckpt_barlowtwins/{args.equiv_mode}/{proj_name}'
+    # args.output_dir_local = f'/home/chris/codes/moco3/results/barlowtwins/{args.equiv_mode}/{proj_name}'
     os.makedirs(args.output_dir, exist_ok=True)
-    os.makedirs(args.output_dir_local, exist_ok=True)
+    # os.makedirs(args.output_dir_local, exist_ok=True)
 
     if args.rank == 0:
         # save final model
         torch.save(save_dict, os.path.join(args.output_dir, 'checkpoint.pth'))
-        torch.save(save_dict, os.path.join(args.output_dir_local, 'checkpoint.pth'))
+        # torch.save(save_dict, os.path.join(args.output_dir_local, 'checkpoint.pth'))
         summary_writer.close()
     
     # dist.destory_process_group()

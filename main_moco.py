@@ -40,7 +40,7 @@ from kornia.constants import Resample
 
 
 parser = argparse.ArgumentParser(description='MoCo ImageNet Pre-Training')
-parser.add_argument('--data', default='/home/chris/storage/imagenet',
+parser.add_argument('--data', default='data/imagenet',
                     help='path to dataset')
 parser.add_argument('-a', '--arch', metavar='ARCH', default='vit_small',
                     choices=['vit_small', 'resnet50'])
@@ -98,7 +98,7 @@ parser.add_argument('--warmup-epochs', default=10, type=int, metavar='N',
                     help='number of warmup epochs')
 parser.add_argument('--crop-min', default=0.08, type=float,
                     help='minimum scale for random cropping (0.25 for dino, 0.08 for both moco and barlowtwins)')
-parser.add_argument('--output_dir', default="/home/chris/codes/erl/results", type=str, help='Path to save logs and checkpoints.')
+parser.add_argument('--output_dir', default="results", type=str, help='Path to save logs and checkpoints.')
 parser.add_argument('--equiv-scale', type=float, nargs='+', default=(0.7, 1.3),
         help="""Scale range of the cropped image before resizing, relatively to the origin image.
         Used for small local view cropping of multi-crop.""")    
@@ -286,27 +286,13 @@ def main():
     # dir1 = os.path.join(args.output_dir, ssl_type, proj_name)
     # os.makedirs(dir1, exist_ok=True)
     # save_on_master(save_dict, os.path.join(dir1, f'checkpoint_{args.batch_size}_{args.lr}.pth'))
-    dir2 = os.path.join('/nfs/thena/chris/icml/ckpt_moco', args.equiv_mode, proj_name)
+    dir2 = os.path.join('ckpts/ckpt_moco', args.equiv_mode, proj_name)
     os.makedirs(dir2, exist_ok=True)
     save_on_master(save_dict, os.path.join(dir2, f'checkpoint_{args.batch_size}_{args.lr}.pth'))
     
     if args.rank == 0:
         summary_writer.close()
 
-    
-    # if dist.get_rank() == 0:
-    #     client = paramiko.SSHClient()
-    #     client.load_system_host_keys()
-    #     client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-    #     client.connect('43.246.152.183', '6150', 'mai1', 'cvpr2025')
-
-    #     try:
-    #         with SCPClient(client.get_transport()) as scp:
-    #             scp.put(dir2, f'/mnt/aitrics_ext/ext01/chris/ckpt_moco/{ssl_type}/', recursive=True, preserve_times=True)
-    #     except SCPException:
-    #         raise SCPException.message
-        
-    #     client.close()
 
 def train(data_loader, model, optimizer, scaler, summary_writer, epoch, args, _mean, _std, \
           aug_equi, equi_scheduler, train_one_step, _loss_list_inv, _loss_list_equiv, etc):
