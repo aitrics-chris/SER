@@ -14,7 +14,67 @@
 #     --batch-size 2048 --epochs 100 --equiv-scale 0.7 1.3 --equiv-lambda 1.0 --equiv-layer 3 --warmup-epochs-scheduler 0 --clip_grad 0.3 --equiv-mode erl --temperature-equiv 0.4 \
 #     --rest-epochs-scheduler 0 --equiv-ratio-start 0.01 --equiv-ratio-end 0.0 --tag unfreeze > out/BT_equiv_vit_small_0.0001_0.0048_0.7_1.3_0.75_1.0_fix_3_0_0_0.01_0.0_clipgrad_0.3_0.4_phastos_ep100_unfreeze.txt
 
-CUDA_VISIBLE_DEVICES=0,1,2,3 OMP_NUM_THREADS=1 PYTHONHASHSEED=1 python -m torch.distributed.launch --nproc_per_node=4 main_moco.py --lr 0.0003 --batch-size 256 --epochs 100 --warmup-epochs 10 \
-    --optimizer adamw --weight-decay 0.1 --moco-m-cos --moco-t 0.2 --equiv-scale 0.7 1.3 --equiv-lambda 1.0 --equiv-layer 12 --warmup-epochs-scheduler 0 --rest-epochs-scheduler 0 \
-    --equiv-ratio-start 0.01 --clip_grad 0.0 --equiv-ratio-end 0.0 --equiv-mode augself --temperature-equiv 0.5 --tag _ > \
-    out/MoCo_equiv_vit_small_0.0024_0.7_1.3_0.75_1.0_fix_3_0_0_0.01_0.0_clipgrad_0.0_0.5_vast_ep100__.txt
+
+########################### AugSelf Analysis ###########################
+
+# CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7 OMP_NUM_THREADS=1 PYTHONHASHSEED=1 python -m torch.distributed.launch --nproc_per_node=8 main_moco.py --lr 0.0003 --batch-size 2048 --epochs 100 --warmup-epochs 10 \
+#     --optimizer adamw --weight-decay 0.1 --moco-t 0.2 --equiv-scale 0.7 1.3 --equiv-lambda 1.0 --equiv-layer 12 --warmup-epochs-scheduler 0 --rest-epochs-scheduler 0 \
+#     --equiv-ratio-start 0.01 --clip_grad 0.0 --equiv-ratio-end 0.0 --equiv-mode augself --temperature-equiv 0.5 --tag augself_default > \
+#     out/MoCo_augself_default.txt
+
+
+# CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7 OMP_NUM_THREADS=1 PYTHONHASHSEED=1 python -m torch.distributed.launch --nproc_per_node=8 main_moco.py --lr 0.0003 --batch-size 2048 --epochs 100 --warmup-epochs 10 \
+#     --optimizer adamw --weight-decay 0.1 --moco-t 0.2 --equiv-scale 0.7 1.3 --equiv-lambda 1.0 --equiv-layer 3 --warmup-epochs-scheduler 0 --rest-epochs-scheduler 0 \
+#     --equiv-ratio-start 0.01 --clip_grad 0.0 --equiv-ratio-end 0.0 --equiv-mode augself --temperature-equiv 0.5 --tag augself_layer3_rot_-1.0 --augself-rot -1.0 > \
+#     out/MoCo_augself_layer3_rot_-1.0.txt
+
+# CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7 OMP_NUM_THREADS=1 PYTHONHASHSEED=1 python -m torch.distributed.launch --nproc_per_node=8 main_moco.py --lr 0.0003 --batch-size 2048 --epochs 100 --warmup-epochs 10 \
+#     --optimizer adamw --weight-decay 0.1 --moco-t 0.2 --equiv-scale 0.7 1.3 --equiv-lambda 1.0 --equiv-layer 12 --warmup-epochs-scheduler 0 --rest-epochs-scheduler 0 \
+#     --equiv-ratio-start 0.01 --clip_grad 0.0 --equiv-ratio-end 0.0 --equiv-mode augself --temperature-equiv 0.5 --tag augself_layer12_rot_0.5 --augself-rot 0.5 > \
+#     out/MoCo_augself_layer12_rot_0.5.txt
+
+# CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7 OMP_NUM_THREADS=1 PYTHONHASHSEED=1 python -m torch.distributed.launch --nproc_per_node=8 main_moco.py --lr 0.0003 --batch-size 2048 --epochs 100 --warmup-epochs 10 \
+#     --optimizer adamw --weight-decay 0.1 --moco-t 0.2 --equiv-scale 0.7 1.3 --equiv-lambda 1.0 --equiv-layer 12 --warmup-epochs-scheduler 0 --rest-epochs-scheduler 0 \
+#     --equiv-ratio-start 0.01 --clip_grad 0.0 --equiv-ratio-end 0.0 --equiv-mode augself --temperature-equiv 0.5 --tag augself_layer12_rot_0.1 --augself-rot 0.1 > \
+#     out/MoCo_augself_layer12_rot_0.1.txt
+
+# CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7 OMP_NUM_THREADS=1 PYTHONHASHSEED=1 python -m torch.distributed.launch --nproc_per_node=8 main_moco.py --lr 0.0003 --batch-size 2048 --epochs 100 --warmup-epochs 10 \
+#     --optimizer adamw --weight-decay 0.1 --moco-t 0.2 --equiv-scale 0.7 1.3 --equiv-lambda 1.0 --equiv-layer 3 --warmup-epochs-scheduler 0 --rest-epochs-scheduler 0 \
+#     --equiv-ratio-start 0.01 --clip_grad 0.0 --equiv-ratio-end 0.0 --equiv-mode augself --temperature-equiv 0.5 --tag augself_layer3_rot_-1.0_crop_0.3_color_0.3 --augself-rot -1.0 --augself-crop 0.3 --augself-color 0.3 > \
+#     out/MoCo_augself_layer3_rot_-1.0_crop_0.3_color_0.3.txt
+
+
+# CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7 OMP_NUM_THREADS=1 PYTHONHASHSEED=1 python -m torch.distributed.launch --nproc_per_node=8 main_moco.py --lr 0.0003 --batch-size 2048 --epochs 100 --warmup-epochs 10 \
+#     --optimizer adamw --weight-decay 0.1 --moco-t 0.2 --equiv-scale 0.7 1.3 --equiv-lambda 1.0 --equiv-layer 3 --warmup-epochs-scheduler 0 --rest-epochs-scheduler 0 \
+#     --equiv-ratio-start 0.01 --clip_grad 0.0 --equiv-ratio-end 0.0 --equiv-mode augself --temperature-equiv 0.5 --tag augself_layer3_rot_-1.0_crop_0.1_color_0.1 --augself-rot -1.0 --augself-crop 0.1 --augself-color 0.1 > \
+#     out/MoCo_augself_layer3_rot_-1.0_crop_0.1_color_0.1.txt
+
+
+# CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7 OMP_NUM_THREADS=1 PYTHONHASHSEED=1 python -m torch.distributed.launch --nproc_per_node=8 main_moco.py --lr 0.0003 --batch-size 2048 --epochs 100 --warmup-epochs 10 \
+#     --optimizer adamw --weight-decay 0.1 --moco-t 0.2 --equiv-scale 0.7 1.3 --equiv-lambda 1.0 --equiv-layer 12 --warmup-epochs-scheduler 0 --rest-epochs-scheduler 0 \
+#     --equiv-ratio-start 0.01 --clip_grad 0.0 --equiv-ratio-end 0.0 --equiv-mode augself --temperature-equiv 0.5 --tag augself_layer12_rot_1.0 --augself-rot 1.0 > \
+#     out/MoCo_augself_layer12_rot_1.0.txt
+
+
+# CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7 OMP_NUM_THREADS=1 PYTHONHASHSEED=1 python -m torch.distributed.launch --nproc_per_node=8 main_moco.py --lr 0.0003 --batch-size 2048 --epochs 100 --warmup-epochs 10 \
+#     --optimizer adamw --weight-decay 0.1 --moco-t 0.2 --equiv-scale 0.7 1.3 --equiv-lambda 1.0 --equiv-layer 12 --warmup-epochs-scheduler 0 --rest-epochs-scheduler 0 \
+#     --equiv-ratio-start 0.01 --clip_grad 0.0 --equiv-ratio-end 0.0 --equiv-mode augself --temperature-equiv 0.5 --tag augself_layer12_rot_3.0 --augself-rot 3.0 > \
+#     out/MoCo_augself_layer12_rot_3.0.txt
+
+    # CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7 OMP_NUM_THREADS=1 PYTHONHASHSEED=1 python -m torch.distributed.launch --nproc_per_node=8 main_moco.py --lr 0.0003 --batch-size 2048 --epochs 100 --warmup-epochs 10 \
+    # --optimizer adamw --weight-decay 0.1 --moco-t 0.2 --equiv-scale 0.7 1.3 --equiv-lambda 1.0 --equiv-layer 12 --warmup-epochs-scheduler 0 --rest-epochs-scheduler 0 \
+    # --equiv-ratio-start 0.01 --clip_grad 0.0 --equiv-ratio-end 0.0 --equiv-mode augself --temperature-equiv 0.5 --tag augself_layer12_rot_0.05 --augself-rot 0.05 > \
+    # out/MoCo_augself_layer12_rot_0.05.txt
+
+
+
+CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7 OMP_NUM_THREADS=1 PYTHONHASHSEED=1 python -m torch.distributed.launch --nproc_per_node=8 main_moco.py --lr 0.0003 --batch-size 2048 --epochs 100 --warmup-epochs 10 \
+    --optimizer adamw --weight-decay 0.1 --moco-t 0.2 --equiv-scale 0.7 1.3 --equiv-lambda 1.0 --equiv-layer 12 --warmup-epochs-scheduler 0 --rest-epochs-scheduler 0 \
+    --equiv-ratio-start 0.01 --clip_grad 0.0 --equiv-ratio-end 0.0 --equiv-mode augself --temperature-equiv 0.5 --tag augself_layer12_rot_0.3 --augself-rot 0.3 > \
+    out/MoCo_augself_layer12_rot_0.3.txt
+
+CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7 OMP_NUM_THREADS=1 PYTHONHASHSEED=1 python -m torch.distributed.launch --nproc_per_node=8 main_moco.py --lr 0.0003 --batch-size 2048 --epochs 100 --warmup-epochs 10 \
+    --optimizer adamw --weight-decay 0.1 --moco-t 0.2 --equiv-scale 0.7 1.3 --equiv-lambda 1.0 --equiv-layer 3 --warmup-epochs-scheduler 0 --rest-epochs-scheduler 0 \
+    --equiv-ratio-start 0.01 --clip_grad 0.0 --equiv-ratio-end 0.0 --equiv-mode augself --temperature-equiv 0.5 --tag augself_layer3_rot_-1.0_crop_0.03_color_0.03 --augself-rot -1.0 --augself-crop 0.03 --augself-color 0.03 > \
+    out/MoCo_augself_layer3_rot_-1.0_crop_0.03_color_0.03.txt
+

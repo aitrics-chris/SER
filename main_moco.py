@@ -116,6 +116,9 @@ parser.add_argument('--rest-epochs-scheduler', default=0, type=int, help='number
 parser.add_argument('--equiv-ratio-start', type=float, default=0.02, help="""Ratio of minibatch for equivariance loss""")
 parser.add_argument('--equiv-ratio-end', type=float, default=0.0, help="""Ratio of minibatch for equivariance loss""")
 parser.add_argument('--tag', default='exxx', type=str, help='append at the end of the foldername')
+parser.add_argument('--augself-rot', type=float, default=-1.0, help="""lambda for augself rotation loss""")
+parser.add_argument('--augself-crop', type=float, default=0.5, help="""lambda for augself rotation loss""")
+parser.add_argument('--augself-color', type=float, default=0.5, help="""lambda for augself rotation loss""")
 
 parser.add_argument('--temperature-equiv', type=float, default=0.5, help="""Temperature for InfoNCE""")
 parser.add_argument('--clip_grad', type=float, default=0.0, help="""Maximal parameter gradient norm if using gradient clipping. 
@@ -125,8 +128,8 @@ def main():
     args = parser.parse_args()
     args.interpolation = InterpolationMode.BILINEAR
 
-    if 'erl' not in args.equiv_mode:
-        assert args.equiv_layer == 12
+    # if 'erl' not in args.equiv_mode:
+    #     assert args.equiv_layer == 12
 
     train_one_step = ssls.__dict__[f'train_{args.equiv_mode}']
 
@@ -268,12 +271,12 @@ def main():
                 'epoch': epoch + 1,
                 'args': args,
                 'student': model.module.base_encoder.state_dict(),
-                'student_head': student_head,
+                # 'student_head': student_head,
                 'teacher': model.module.momentum_encoder.state_dict(),
-                'teacher_head': teacher_head,
-                'projector_equiv': model.module.projector_equiv.state_dict() if args.equiv_mode.split('_')[0] != 'inv' else None,
-                'optimizer' : optimizer.state_dict(),
-                'scaler': scaler.state_dict(),
+                # 'teacher_head': teacher_head,
+                # 'projector_equiv': model.module.projector_equiv.state_dict() if args.equiv_mode.split('_')[0] != 'inv' else None,
+                # 'optimizer' : optimizer.state_dict(),
+                # 'scaler': scaler.state_dict(),
                 'loss_list_inv': np.array(loss_list_inv),
                 'loss_list_equiv': np.array(loss_list_equiv),
                 }    
@@ -283,9 +286,23 @@ def main():
     # dir1 = os.path.join(args.output_dir, ssl_type, proj_name)
     # os.makedirs(dir1, exist_ok=True)
     # save_on_master(save_dict, os.path.join(dir1, f'checkpoint_{args.batch_size}_{args.lr}.pth'))
-    dir2 = os.path.join('/nfs/thena/chris/icml/ckpt_moco', args.equiv_mode, proj_name)
+    dir2 = os.path.join('/nfs/thena/chris/equiv_analysis/ckpt_moco', args.equiv_mode, proj_name)
     os.makedirs(dir2, exist_ok=True)
     save_on_master(save_dict, os.path.join(dir2, f'checkpoint_{args.batch_size}_{args.lr}.pth'))
+    save_dict = {
+                'epoch': epoch + 1,
+                # 'args': args,
+                'student': model.module.base_encoder.state_dict(),
+                # 'student_head': student_head,
+                'teacher': model.module.momentum_encoder.state_dict(),
+                # 'teacher_head': teacher_head,
+                # 'projector_equiv': model.module.projector_equiv.state_dict() if args.equiv_mode.split('_')[0] != 'inv' else None,
+                # 'optimizer' : optimizer.state_dict(),
+                # 'scaler': scaler.state_dict(),
+                'loss_list_inv': np.array(loss_list_inv),
+                'loss_list_equiv': np.array(loss_list_equiv),
+                }    
+    save_on_master(save_dict, os.path.join(dir2, f'checkpoint_no_args_{args.batch_size}_{args.lr}.pth'))
     
     if args.rank == 0:
         summary_writer.close()

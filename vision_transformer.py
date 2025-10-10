@@ -147,7 +147,7 @@ class VisionTransformer(nn.Module):
 
         self.cls_token = nn.Parameter(torch.zeros(1, 1, embed_dim))
         if 'erl' not in equiv_mode:
-            assert equiv_layer == 12
+            # assert equiv_layer == 12
             self.pos_embed = nn.Parameter(torch.zeros(1, num_patches+1, embed_dim))
             self.forward_inv = self.forward_baseline
             self.get_intermediate_layers = self.get_intermediate_layers_baseline        
@@ -167,7 +167,10 @@ class VisionTransformer(nn.Module):
             for i in range(depth)])
         self.norm = norm_layer(embed_dim)
         if equiv_layer != 12:
+        # if 'erl' not in equiv_mode:
             self.norm_equiv = norm_layer(embed_dim)
+        else:
+            self.norm_equiv = self.norm
         self.equiv_layer = equiv_layer
 
         # Classifier head
@@ -260,7 +263,8 @@ class VisionTransformer(nn.Module):
         B, nc, w, h = x.shape
         x = self.patch_embed(x)  # patch linear embedding
 
-        if self.equiv_layer == 12:
+        # if self.equiv_layer == 12:
+        if 'erl' not in self.equiv_mode:
             # add the [CLS] token to the embed patch tokens
             cls_tokens = self.cls_token.expand(B, -1, -1)
             x = torch.cat((cls_tokens, x), dim=1)
@@ -341,6 +345,27 @@ class VisionTransformer(nn.Module):
             return x[:, 0]
             # return x[:, 0]
         
+    # def forward_baseline(self, x):
+    #     # print(f'forward_baseline')
+    #     with torch.autocast(device_type="cuda"):
+    #         h = int(x.size(2)/16)
+    #         w = int(x.size(3)/16)
+            
+    #         B, nc, _w, _h = x.shape
+    #         x = self.patch_embed(x)  # patch linear embedding
+
+    #         # add the [CLS] token to the embed patch tokens
+    #         cls_tokens = self.cls_token.expand(B, -1, -1)
+    #         x = torch.cat((cls_tokens, x), dim=1)
+
+    #         # add positional encoding to each token
+    #         x = self.pos_drop(x + self.interpolate_pos_encoding_baseline(x, _w, _h))
+
+    #         for i, blk in enumerate(self.blocks):
+    #             x = blk(x)
+    #         x = self.norm(x)
+    #         return x[:, 0]
+
     def forward_baseline(self, x):
         # print(f'forward_baseline')
         with torch.autocast(device_type="cuda"):
@@ -359,8 +384,14 @@ class VisionTransformer(nn.Module):
 
             for i, blk in enumerate(self.blocks):
                 x = blk(x)
-            x = self.norm(x)
-            return x[:, 0]
+                if i == (self.equiv_layer-1):
+                    feat_equiv = self.norm_equiv(x[:, 0])
+            
+            if self.equiv_layer != 12:
+                x = self.norm(x)
+                return x[:, 0], feat_equiv
+            else:
+                return feat_equiv, feat_equiv
         
 
     def get_last_selfattention(self, x):
@@ -425,8 +456,8 @@ class VisionTransformer(nn.Module):
 
 def vit_small(args, ssl_type, drop_path_rate, **kwargs):
     assert (args.equiv_layer >= 1) and (args.equiv_layer <= 12)
-    if 'erl' not in args.equiv_mode:
-        assert args.equiv_layer == 12
+    # if 'erl' not in args.equiv_mode:
+    #     assert args.equiv_layer == 12
     model = VisionTransformer(
         patch_size=16, embed_dim=384, depth=12, num_heads=6, mlp_ratio=4, drop_path_rate=drop_path_rate,
         qkv_bias=True, norm_layer=partial(nn.LayerNorm, eps=1e-6), equiv_layer=args.equiv_layer, equiv_mode=args.equiv_mode, ssl_type=ssl_type, **kwargs)

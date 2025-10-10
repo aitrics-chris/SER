@@ -213,14 +213,21 @@ class MoCo(nn.Module):
                                                     nn.Linear(256, 4))  # output layer    
         elif args.equiv_mode.split('_')[0] == 'augself':
 
-            # Hyperparameter from ImageNET-100 default, https://github.com/hankook/AugSelf/tree/main
-            self.ss_objective = SSObjective(
-                                                crop  = 0.5,
-                                                color = 0.5,
-                                                flip  = -1.0,
-                                                blur  = -1.0,
-                                                only  = False,
-                                            )
+            if args.augself_rot <= 0:
+                # Hyperparameter from ImageNET-100 default, https://github.com/hankook/AugSelf/tree/main
+                self.ss_objective = SSObjective(
+                                                    crop  = args.augself_crop, # args.augself_crop
+                                                    color = args.augself_color, # args.augself_color
+                                                    flip  = -1.0,
+                                                    blur  = -1.0,
+                                                    only  = False,
+                                                )
+            else:
+                # Hyperparameter from ImageNET-100 default, https://github.com/hankook/AugSelf/tree/main
+                self.ss_objective = SSObjective(
+                                                    rot  = args.augself_rot,
+                                                )
+
             self.projector_equiv = load_ss_predictor(n_in=384, ss_objective=self.ss_objective)
 
 
@@ -286,17 +293,20 @@ class MoCo(nn.Module):
         """
 
         # compute features
-        q1 = self.base_encoder.forward_inv(x1)
-        q2 = self.base_encoder.forward_inv(x2)
+        # q1 = self.base_encoder.forward_inv(x1)
+        # q2 = self.base_encoder.forward_inv(x2)
+        q1, q1_equiv = self.base_encoder.forward_inv(x1)
+        q2, q2_equiv = self.base_encoder.forward_inv(x2)
 
         with torch.no_grad():  # no gradient
             self._update_momentum_encoder(m)  # update the momentum encoder
 
             # compute momentum features as targets
-            k1 = self.momentum_encoder.forward_inv(x1)
-            k2 = self.momentum_encoder.forward_inv(x2)
+            k1, _ = self.momentum_encoder.forward_inv(x1)
+            k2, _ = self.momentum_encoder.forward_inv(x2)
 
-        return q1, q2, k1, k2
+        # return q1, q2, k1, k2
+        return q1, q2, k1, k2, q1_equiv, q2_equiv
 
     def forward_essl(self, x):
         """
@@ -680,14 +690,16 @@ class MoCo(nn.Module):
         # return loss_inv, loss_inv, loss_equiv, loss_equiv_max
 
     def augself(self, images_inv_0, images_inv_1, moco_m, d1, d2):        
-        cls_q0, cls_q1, cls_k0, cls_k1 = self.forward_inv(images_inv_0, images_inv_1, moco_m)
+        # cls_q0, cls_q1, cls_k0, cls_k1 = self.forward_inv(images_inv_0, images_inv_1, moco_m)
+        cls_q0, cls_q1, cls_k0, cls_k1, cls_q0_equiv, cls_q1_equiv = self.forward_inv(images_inv_0, images_inv_1, moco_m)
         cls_q0_inv = self.predictor(self.base_encoder.head(cls_q0))
         cls_q1_inv = self.predictor(self.base_encoder.head(cls_q1))
         cls_k0_inv = self.momentum_encoder.head(cls_k0)
         cls_k1_inv = self.momentum_encoder.head(cls_k1)
         loss_inv = self.loss_inv(cls_q0_inv, cls_q1_inv, cls_k0_inv, cls_k1_inv)
 
-        loss_equiv = self.ss_objective(self.projector_equiv, cls_q0, cls_q1, d1, d2)
+        # loss_equiv = self.ss_objective(self.projector_equiv, cls_q0, cls_q1, d1, d2)
+        loss_equiv = self.ss_objective(self.projector_equiv, cls_q0_equiv, cls_q1_equiv, d1, d2)
         loss = loss_inv + loss_equiv['total']
         return loss, loss_inv, loss_equiv['total']
     

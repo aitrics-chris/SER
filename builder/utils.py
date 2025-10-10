@@ -1362,14 +1362,26 @@ def load_ss_predictor(n_in, ss_objective, n_hidden=512):
     return ss_predictor
 
 def load_equiv_aug_augself(args):
-    t1 = nn.Sequential(K.RandomHorizontalFlip(),
+    if args.augself_rot <= 0:
+        t1 = nn.Sequential(K.RandomHorizontalFlip(),
+                            ColorJitter_augself(0.4, 0.4, 0.4, 0.1, p=0.8),
+                            K.RandomGrayscale(p=0.2),
+                            GaussianBlur_augself(23, (0.1, 2.0)))
+        t2 = nn.Sequential(K.RandomHorizontalFlip(),
+                            ColorJitter_augself(0.4, 0.4, 0.4, 0.1, p=0.8),
+                            K.RandomGrayscale(p=0.2),
+                            GaussianBlur_augself(23, (0.1, 2.0)))
+    else:
+        t1 = nn.Sequential(K.RandomHorizontalFlip(),
                            ColorJitter_augself(0.4, 0.4, 0.4, 0.1, p=0.8),
                            K.RandomGrayscale(p=0.2),
-                           GaussianBlur_augself(23, (0.1, 2.0)))
-    t2 = nn.Sequential(K.RandomHorizontalFlip(),
-                        ColorJitter_augself(0.4, 0.4, 0.4, 0.1, p=0.8),
-                        K.RandomGrayscale(p=0.2),
-                        GaussianBlur_augself(23, (0.1, 2.0)))
+                           GaussianBlur_augself(9, (0.1, 2.0)),
+                           RandomRotation_augself(p=0.5))
+        t2 = nn.Sequential(K.RandomHorizontalFlip(),
+                           ColorJitter_augself(0.4, 0.4, 0.4, 0.1, p=0.8),
+                           K.RandomGrayscale(p=0.2),
+                           GaussianBlur_augself(9, (0.1, 2.0)),
+                           RandomRotation_augself(p=0.5))
     
     return t1, t2
 
