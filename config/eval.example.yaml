@@ -1,0 +1,10 @@
+# One list entry per independent linear-probe run. Replace the checkpoint path.
+# This is an example, not the missing experiment manifest for the paper's tables.
+ckpts: ['/path/to/trusted/checkpoint.pth']
+lrs: [3.0]  # base LR, scaled by batch_size_per_gpu / 256
+gpus: [0]   # logical index after CUDA_VISIBLE_DEVICES
+arch: ['vit_small']
+equiv_layer: [3]
+if_baseline: [false]  # false: SER (erl); true: baseline (inv, CLS from input)
+# Optional per-run seeds: seed: [1]. Otherwise --seed applies to every run.
+# checkpoint_key: auto  # student for MoCo/DINO; model for Barlow Twins
